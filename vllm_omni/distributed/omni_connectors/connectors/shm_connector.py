@@ -2,7 +2,12 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from typing import Any
+import os
+import time
+import safetensors
+import torch
 
+from collections import defaultdict
 from vllm_omni.entrypoints.stage_utils import shm_read_bytes, shm_write_bytes
 
 from ..utils.logging import get_connector_logger
@@ -19,6 +24,11 @@ class SharedMemoryConnector(OmniConnectorBase):
 
     def __init__(self, config: dict[str, Any]):
         self.config = config
+        self.stage_id = config.get("stage_id", -1)
+        self.device = config.get("device", "cuda:0")
+        self.requests: dict[str, int] = defaultdict(int)
+        self.request_prompt_token_ids: dict[str, list[int]] = defaultdict(list)
+        self._storage_path = config.get("store_path", "/tmp")
         # Default threshold matches legacy behavior (64KB)
         self.threshold = int(config.get("shm_threshold_bytes", 65536))
         self._metrics = {
@@ -116,3 +126,140 @@ class SharedMemoryConnector(OmniConnectorBase):
 
     def health(self) -> dict[str, Any]:
         return {"status": "healthy", "threshold": self.threshold, **self._metrics}
+
+    def put_chunk(self, scheduler_output, output_data) -> None:
+        if self.stage_id == 1:
+            return
+
+        #TODO cache_reqs
+        for new_req_data in scheduler_output.scheduled_new_reqs:
+            request_id = new_req_data.req_id
+            prompt_token_ids = new_req_data.prompt_token_ids
+            self.request_prompt_token_ids[request_id] = prompt_token_ids
+            chunk = self.requests[request_id]
+            stage_key = f"{request_id}_{self.stage_id}_{chunk}"
+            filename = self._generate_filename_debug(stage_key)
+            if os.path.exists(filename):
+                continue
+
+            tensors = {
+                "thinker_embeddings": output_data.multimodal_outputs["0"].detach().cpu(),
+                "thinker_hidden_states": output_data.multimodal_outputs["24"].detach().cpu(),
+                "tts_bos_embed": output_data.multimodal_outputs["tts_bos_embed"][0].detach().cpu(),
+                "tts_eos_embed": output_data.multimodal_outputs["tts_eos_embed"][0].detach().cpu(),
+                "tts_pad_embed": output_data.multimodal_outputs["tts_pad_embed"][0].detach().cpu(),
+                "thinker_input_ids": torch.tensor(prompt_token_ids, dtype=torch.int32),
+            }
+            self.requests[request_id] += 1
+            safetensors.torch.save_file(tensors, filename)
+        
+        cached_reqs = scheduler_output.scheduled_cached_reqs
+        for i, request_id in enumerate(cached_reqs.req_ids):
+            num_computed_tokens = cached_reqs.num_computed_tokens[i]
+            prompt_token_ids = self.request_prompt_token_ids[request_id]
+            if num_computed_tokens <= len(prompt_token_ids):
+                chunk = self.requests[request_id]
+                stage_key = f"{request_id}_{self.stage_id}_{chunk}"
+                filename = self._generate_filename_debug(stage_key)
+                if os.path.exists(filename):
+                    continue
+                tensors = {
+                    "thinker_embeddings": output_data.multimodal_outputs["0"].detach().cpu(),
+                    "thinker_hidden_states": output_data.multimodal_outputs["24"].detach().cpu(),
+                    "tts_bos_embed": output_data.multimodal_outputs["tts_bos_embed"][0].detach().cpu(),
+                    "tts_eos_embed": output_data.multimodal_outputs["tts_eos_embed"][0].detach().cpu(),
+                    "tts_pad_embed": output_data.multimodal_outputs["tts_pad_embed"][0].detach().cpu(),
+                }
+                self.requests[request_id] += 1
+                safetensors.torch.save_file(tensors, filename)
+
+    def get_chunk(self, scheduler_output):
+        if self.stage_id == 0:
+            return
+
+        target_stage_id = self.stage_id - 1
+        #TODO cache_reqs
+        for new_req_data in scheduler_output.scheduled_new_reqs:
+            request_id = new_req_data.req_id
+            chunk = self.requests[request_id]
+            stage_key = f"{request_id}_{target_stage_id}_{chunk}"
+            # TODO
+            wait_time = 30
+            for _ in range(wait_time):
+                if self._found_match_for_stage_chunk(stage_key):
+                    break
+                else:
+                    time.sleep(1)
+            filename = self._generate_filename_debug(stage_key)
+            output_data = safetensors.torch.load_file(filename)
+            tensors = {
+                "thinker_embeddings": output_data.get("thinker_embeddings").detach(),
+                "thinker_hidden_states": output_data.get("thinker_hidden_states").detach(),
+                "thinker_input_ids": output_data.get("thinker_input_ids").tolist(),
+                "tts_bos_embed": (output_data.get("tts_bos_embed").detach()),
+                "tts_eos_embed": (output_data.get("tts_eos_embed").detach()),
+                "tts_pad_embed": (output_data.get("tts_pad_embed").detach()),
+            }
+            self.requests[request_id] += 1
+            self.request_prompt_token_ids[request_id] = tensors["thinker_input_ids"]
+            new_req_data.additional_information = tensors
+            logger.info(f"get chunk {stage_key} from shm connector, tensors:{tensors}")
+        
+        cached_reqs = scheduler_output.scheduled_cached_reqs
+        for i, request_id in enumerate(cached_reqs.req_ids):
+            num_computed_tokens = cached_reqs.num_computed_tokens[i]
+            prompt_token_ids = self.request_prompt_token_ids[request_id]
+            if num_computed_tokens <= len(prompt_token_ids):
+                chunk = self.requests[request_id]
+                stage_key = f"{request_id}_{target_stage_id}_{chunk}"
+                # TODO
+                wait_time = 30
+                for _ in range(wait_time):
+                    if self._found_match_for_stage_chunk(stage_key):
+                        break
+                    else:
+                        time.sleep(1)
+                filename = self._generate_filename_debug(stage_key)
+                output_data = safetensors.torch.load_file(filename)
+                tensors = {
+                    "thinker_embeddings": output_data.get("thinker_embeddings").detach(),
+                    "thinker_hidden_states": output_data.get("thinker_hidden_states").detach(),
+                    "thinker_input_ids": prompt_token_ids,
+                    "tts_bos_embed": (output_data.get("tts_bos_embed").detach()),
+                    "tts_eos_embed": (output_data.get("tts_eos_embed").detach()),
+                    "tts_pad_embed": (output_data.get("tts_pad_embed").detach()),
+                }
+                self.requests[request_id] += 1
+                cached_reqs.additional_information = tensors
+                logger.info(f"get chunk {stage_key} from shm connector, tensors:{tensors}")
+
+    def _found_match_for_stage_chunk(self, stage_chunk_key) -> bool:
+        """Check if the cache is hit for the request."""
+        filename = self._generate_filename_debug(stage_chunk_key)
+        return os.path.exists(filename)
+
+    def _generate_foldername_debug(
+            self,
+            stage_chunk_key: str,
+            create_folder: bool = True,  # <- now defaults to True
+    ) -> str:
+        """
+        Return the folder in which the cache for this stage_chunk_key lives.
+        If `create_folder` is True (default) the directory is created
+        recursively the first time it is needed.
+        """
+        foldername = os.path.join(self._storage_path, stage_chunk_key)
+        if create_folder:
+            os.makedirs(foldername, exist_ok=True)
+        return foldername
+
+    def _generate_filename_debug(self, stage_chunk_key: str) -> str:
+        """
+        Return the full path of the safetensors file for this stage_chunk_key.
+        Ensures the parent directory exists because
+        `_generate_foldername_debug` is called with its default
+        (`create_folder=True`).
+        """
+        foldername = self._generate_foldername_debug(
+            stage_chunk_key)  # <- folder auto-created
+        return os.path.join(foldername, "stage_cache.safetensors")
