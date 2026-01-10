@@ -1186,6 +1186,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
                         yield f"data: {data}\n\n"
 
                 elif final_output_type == "audio":
+                    role = self.get_chat_request_role(request)
                     choices_data = self._create_audio_choice(omni_res, role, request, stream=True)
                     chunk = OmniChatCompletionStreamResponse(
                         id=request_id,
@@ -1611,7 +1612,7 @@ class OmniOpenAIServingChat(OpenAIServingChat, AudioMixin):
     ):
         choices: list[ChatCompletionResponseChoice] = []
         final_res = omni_outputs.request_output
-        if self.model_config.async_chunk:
+        if stream:
             audio_tensor = final_res.multimodal_output["audio"][-1].float().detach().cpu().numpy()
         else:
             audio_tensor = final_res.multimodal_output["audio"].float().detach().cpu().numpy()

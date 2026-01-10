@@ -12,7 +12,7 @@ from vllm.v1.engine import EngineCoreEventType, EngineCoreOutput, EngineCoreOutp
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 
-from vllm_omni.core.sched.output import OmniNewRequestData
+from vllm_omni.core.sched.output import OmniNewRequestData, OmniCachedRequestData
 from vllm_omni.distributed.omni_connectors.adapter import get_chunk_for_generation
 from vllm_omni.distributed.omni_connectors.factory import OmniConnectorFactory
 from vllm_omni.distributed.omni_connectors.utils.config import ConnectorSpec
@@ -49,6 +49,7 @@ class OmniGenerationScheduler(VLLMScheduler):
         scheduled_running_reqs: list[Request] = []
         scheduled_spec_decode_tokens: dict[str, list[int]] = {}
         scheduled_encoder_inputs: dict[str, list[int]] = {}
+        cached_prompt_token_ids: dict[str, list[int]] = {}
 
         # Temporary queue: preserve waiting order, do not disturb non-diffusion requests
         skipped_waiting_requests = create_request_queue(self.policy)
@@ -75,6 +76,7 @@ class OmniGenerationScheduler(VLLMScheduler):
                 request.record_event(EngineCoreEventType.SCHEDULED, scheduled_timestamp)
             req_to_new_blocks[request.request_id] = new_blocks
             num_scheduled_tokens[request.request_id] = num_new_tokens
+            cached_prompt_token_ids[request.request_id] = request.prompt_token_ids
             token_budget -= num_new_tokens
             scheduled_running_reqs.append(request)
             req_index += 1
@@ -153,6 +155,16 @@ class OmniGenerationScheduler(VLLMScheduler):
             num_scheduled_tokens=num_scheduled_tokens,
             spec_decode_tokens=scheduled_spec_decode_tokens,
             req_to_new_blocks=req_to_new_blocks,
+        )
+
+        cached_reqs_data = OmniCachedRequestData(req_ids=cached_reqs_data.req_ids,
+            resumed_req_ids=cached_reqs_data.resumed_req_ids,
+            new_token_ids=cached_reqs_data.new_token_ids,
+            all_token_ids=cached_reqs_data.all_token_ids,
+            new_block_ids=cached_reqs_data.new_block_ids,
+            num_computed_tokens=cached_reqs_data.num_computed_tokens,
+            num_output_tokens=cached_reqs_data.num_output_tokens,
+            prompt_token_ids=cached_prompt_token_ids,
         )
 
         total_num_scheduled_tokens = sum(num_scheduled_tokens.values())

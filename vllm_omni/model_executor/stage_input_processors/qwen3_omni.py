@@ -217,6 +217,8 @@ def talker2code2wav_async_chunk(
         .reshape(-1)
         .tolist()
     )
+    if sum(codec_codes) == 0:
+        return []
 
     return {
         "code_predictor_codes": codec_codes,
