@@ -7,6 +7,8 @@ import time
 from collections.abc import Callable
 from typing import Any
 
+from vllm.v1.request import RequestStatus
+
 from vllm_omni.entrypoints.stage_utils import OmniStageTaskType
 
 from .utils.logging import get_connector_logger
@@ -194,11 +196,13 @@ def get_chunk(connector, scheduler_output):
         payload_data = get_through_connector(connector, target_stage_id, stage_id, req_id, connector_get_key)
         if payload_data:
             new_req_data.additional_information = payload_data
+            if payload_data.get("finished"):
+                connector.finished_requests.add(req_id)
 
     # Handle cached/running requests
     cached_reqs = scheduler_output.scheduled_cached_reqs
-    if not hasattr(cached_reqs, "additional_information"):
-        cached_reqs.additional_information = {}
+    if not hasattr(cached_reqs, "additional_informations"):
+        cached_reqs.additional_informations = {}
 
     for i, req_id in enumerate(cached_reqs.req_ids):
         if req_id in connector.finished_requests:
@@ -207,7 +211,9 @@ def get_chunk(connector, scheduler_output):
         connector_get_key = f"{req_id}_{target_stage_id}_{chunk_id}"
         payload_data = get_through_connector(connector, target_stage_id, stage_id, req_id, connector_get_key)
         if payload_data:
-            cached_reqs.additional_information[req_id] = payload_data
+            cached_reqs.additional_informations[req_id] = payload_data
+            if payload_data.get("finished"):
+                connector.finished_requests.add(req_id)
 
 
 def get_through_connector(connector, target_stage_id, stage_id, req_id, connector_get_key):
@@ -225,6 +231,7 @@ def get_through_connector(connector, target_stage_id, stage_id, req_id, connecto
         payload_data = None
         if result:
             payload_data, size = result
+            logger.info(f"[Stage-{stage_id}] Received payload {payload_data}")
             if payload_data:
                 # TODO: custom validate the payload_data ?
                 if stage_id == 2:
@@ -247,7 +254,7 @@ def validate_talker_output(payload_data):
     code_predictor_codes = payload_data.get("code_predictor_codes", [])
     if code_predictor_codes and len(code_predictor_codes) > 0:
         token_count = len(code_predictor_codes)
-        if token_count % 16 == 0 or token_count > 100:
+        if token_count % 16 == 0:
             return True
     return False
 
@@ -276,7 +283,9 @@ def get_chunk_for_generation(connector, request):
 
     if payload_data.get("finished"):
         connector.finished_requests.add(request_id)
+        request.status = RequestStatus.FINISHED_STOPPED
 
+    # TODO: remove special handling for prompt token ids ?
     if chunk_id == 0:
         request.prompt_token_ids = payload_data.get("code_predictor_codes", [])
     else:
@@ -300,6 +309,7 @@ def put_chunk(connector, pooling_output, request, custom_process_input_func=None
     connector_put_key = f"{request_id}_{stage_id}_{chunk_id}"
     payload_data = None
 
+    # TODO: add default process_input_func to handle the payload_data ?
     if custom_process_input_func:
         try:
             payload_data = custom_process_input_func(
@@ -319,4 +329,4 @@ def put_chunk(connector, pooling_output, request, custom_process_input_func=None
 
         if success:
             connector.put_requests[request_id] += 1
-            logger.info(f"[Stage-{stage_id}] Sent chunk {chunk_id} for request {connector_put_key}")
+            logger.info(f"[Stage-{stage_id}] Sent {connector_put_key}")

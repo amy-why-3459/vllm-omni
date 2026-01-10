@@ -34,6 +34,7 @@ from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
 from vllm_omni.outputs import OmniRequestOutput
+from vllm_omni.distributed.omni_connectors.adapter import try_send_via_connector
 
 logger = init_logger(__name__)
 
@@ -338,12 +339,14 @@ class AsyncOmni(OmniBase):
                     prompt_1 = prompt.copy()
                     prompt_1["prompt_token_ids"] = [0] * len(prompt_token_ids)
                     engine_inputs = prompt_1
+
                 task = {
                     "request_id": request_id,
                     "engine_inputs": engine_inputs,
                     "sampling_params": sp,
                 }
                 self.stage_list[i].submit(task)
+
                 logger.info(f"[{self._name}] Enqueued request {request_id} to stage-{str(i)}")
 
             _req_start_ts[request_id] = time.time()
