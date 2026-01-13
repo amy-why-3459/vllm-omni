@@ -77,7 +77,7 @@ class OmniModelConfig(ModelConfig):
     model_arch: str = "Qwen2_5OmniForConditionalGeneration"
     engine_output_type: str | None = None
     hf_config_name: str | None = None
-    custom_process_input_func: str | None = None
+    custom_process_next_stage_input_func: str | None = None
     stage_connector_name: str = "SharedMemoryConnector"
     stage_connector_extra: dict[str, Any] = field(default_factory=dict)
 
