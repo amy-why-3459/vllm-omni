@@ -36,7 +36,7 @@ class OmniEngineArgs(EngineArgs):
         engine_output_type: Optional output type specification for the engine.
             Used to route outputs to appropriate processors (e.g., "image",
             "audio", "latents"). If None, output type is inferred.
-        custom_process_input_func: Optional path to a custom function for processing
+        custom_process_next_stage_input_func: Optional path to a custom function for processing
             inputs from previous stages 
             If None, default processing is used.
         stage_connector_spec: Extra configuration for stage connector
@@ -48,7 +48,7 @@ class OmniEngineArgs(EngineArgs):
     model_arch: str = "Qwen2_5OmniForConditionalGeneration"
     engine_output_type: str | None = None
     hf_config_name: str | None = None
-    custom_process_input_func: str | None = None
+    custom_process_next_stage_input_func: str | None = None
     stage_connector_spec: dict[str, any] = field(default_factory=dict)
     async_chunk: bool = False
 
@@ -108,7 +108,7 @@ class OmniEngineArgs(EngineArgs):
         config_dict["stage_connector_extra"]["stage_id"] = self.stage_id
 
         config_dict["hf_config_name"] = self.hf_config_name
-        config_dict["custom_process_input_func"] = self.custom_process_input_func
+        config_dict["custom_process_next_stage_input_func"] = self.custom_process_next_stage_input_func
         if self.hf_config_name is not None:
             config_dict["hf_text_config"] = self.draw_hf_text_config(config_dict)
         # Create and return the OmniModelConfig instance
@@ -132,8 +132,6 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
         engine_output_type: Optional output type specification for the engine.
             Used to route outputs to appropriate processors (e.g., "image",
             "audio", "latents"). If None, output type is inferred.
-        custom_process_input_func: Optional path to a custom function for processing
-            inputs from previous stages.If None, default processing is used.
         stage_connector_spec: Extra configuration for stage connector
     """
 
@@ -142,7 +140,7 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
     model_arch: str = "Qwen2_5OmniForConditionalGeneration"
     engine_output_type: str | None = None
     hf_config_name: str | None = None
-    custom_process_input_func: str | None = None
+    custom_process_next_stage_input_func: str | None = None
     stage_connector_spec: dict[str, any] = field(default_factory=dict)
     async_chunk: bool = False
 
@@ -192,7 +190,7 @@ class AsyncOmniEngineArgs(AsyncEngineArgs):
         config_dict["stage_connector_extra"]["stage_id"] = self.stage_id
 
         config_dict["hf_config_name"] = self.hf_config_name
-        config_dict["custom_process_input_func"] = self.custom_process_input_func
+        config_dict["custom_process_next_stage_input_func"] = self.custom_process_next_stage_input_func
         if self.hf_config_name is not None:
             config_dict["hf_text_config"] = self.draw_hf_text_config(config_dict)
         # Create and return the OmniModelConfig instance

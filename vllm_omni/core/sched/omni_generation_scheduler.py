@@ -24,6 +24,7 @@ class OmniGenerationScheduler(VLLMScheduler):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         model_config = self.vllm_config.model_config
+        self.omni_connector = None
         if model_config.async_chunk:
             connector_specs = ConnectorSpec(name=model_config.stage_connector_name,
                                             extra=model_config.stage_connector_extra)
@@ -271,7 +272,8 @@ class OmniGenerationScheduler(VLLMScheduler):
                 pooler_output = pooler_outputs[req_index]
 
             # Diffusion request: completes in one step; mark finished and free resources
-            if request.num_computed_tokens > request.num_prompt_tokens or request.status == RequestStatus.FINISHED_STOPPED:
+            if request.status == RequestStatus.FINISHED_STOPPED or (self.omni_connector is None and
+                request.num_computed_tokens >= request.num_prompt_tokens):
                 request.status = RequestStatus.FINISHED_STOPPED
                 # Optional: set a stop_reason for front-end clarity
                 # (does not affect protocol)
