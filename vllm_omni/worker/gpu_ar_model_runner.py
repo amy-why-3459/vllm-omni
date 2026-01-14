@@ -194,11 +194,11 @@ class GPUARModelRunner(OmniGPUModelRunner):
                 # Common case.
                 hidden_states = model_output
                 aux_hidden_states = None
-                logger.info(f"execute_model 0 hidden_states: {hidden_states}")
+                # logger.info(f"execute_model 0 hidden_states: {hidden_states}")
 
             multimodal_outputs = model_output.multimodal_outputs
             hidden_states = model_output.text_hidden_states
-            logger.info(f"execute_model 1 hidden_states: {hidden_states}, shape {hidden_states.shape}")
+            # logger.info(f"execute_model 1 hidden_states: {hidden_states}, shape {hidden_states.shape}")
             if multimodal_outputs is not None:
                 keys_or_type = (
                     list(multimodal_outputs.keys())
@@ -244,9 +244,9 @@ class GPUARModelRunner(OmniGPUModelRunner):
                     logits_indices = logits_indices_relative
                     logger.info(f"Adjusted logits_indices to relative: {logits_indices}")
                 
-                logger.info(f"execute_model: hidden_states shape {hidden_states.shape}, logits_indices: {logits_indices}")
+                # logger.info(f"execute_model: hidden_states shape {hidden_states.shape}, logits_indices: {logits_indices}")
                 sample_hidden_states = hidden_states[logits_indices]
-                logger.info(f"sample_hidden_states shape {sample_hidden_states.shape}")
+                # logger.info(f"sample_hidden_states shape {sample_hidden_states.shape}")
                 logits = self.model.compute_logits(sample_hidden_states)
             else:
                 assert not self.is_pooling_model

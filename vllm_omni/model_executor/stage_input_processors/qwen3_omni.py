@@ -209,6 +209,15 @@ def talker2code2wav_async_chunk(
         if len(code_predictor_codes) == 0:
             return []
 
+    # Check if all values are zero
+    if isinstance(code_predictor_codes, torch.Tensor):
+        if torch.all(code_predictor_codes == 0):
+            return []
+    else:
+        code_tensor = torch.tensor(code_predictor_codes, dtype=torch.long)
+        if torch.all(code_tensor == 0):
+            return []
+
     codec_codes = (
         code_predictor_codes.to(torch.long)
         .transpose(0, 1)

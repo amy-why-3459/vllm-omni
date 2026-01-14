@@ -18,6 +18,9 @@ try:
 except ImportError:
     soundfile = None
 
+import numpy as np
+import torch
+
 from openai.types.chat.chat_completion_audio import ChatCompletionAudio as OpenAIChatCompletionAudio
 from vllm.entrypoints.chat_utils import (
     ChatCompletionMessageParam,

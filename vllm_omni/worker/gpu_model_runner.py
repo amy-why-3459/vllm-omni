@@ -724,7 +724,6 @@ class OmniGPUModelRunner(GPUModelRunner):
             if hasattr(self.model, "has_postprocess") and self.model.has_postprocess:
                 for req_index, req_id in enumerate(self.input_batch.req_ids):
                     req_infos = self._get_additional_information(scheduler_output, req_id)
-                    req_infos = self._get_additional_information(scheduler_output, req_id)
                     start_offset = int(self.query_start_loc.cpu[req_index])
                     sched_tokens = int(num_scheduled_tokens_np[req_index])
                     s, e = start_offset, start_offset + sched_tokens
@@ -959,7 +958,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                             req_input_ids, req_embeds, last_talker_hidden, text_step
                         )
                         update_dict["code_predictor_codes"] = code_predictor_codes
-                        logger.info(f"talker_mtp: update_dict {update_dict}, code_predictor_codes shape: {code_predictor_codes.shape}")
+                        # logger.info(f"talker_mtp: update_dict {update_dict}, code_predictor_codes shape: {code_predictor_codes.shape}")
                 # TODO(Peiqi): the merge stage could move out from the critical path
                 self._merge_additional_information_update(req_id, update_dict)
 

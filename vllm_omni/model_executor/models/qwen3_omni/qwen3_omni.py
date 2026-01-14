@@ -194,6 +194,8 @@ class Qwen3OmniMoeForConditionalGeneration(
                 device=self._module_device(self.thinker),
                 dtype=torch.long,
             )
+        
+        self.chunk_segment_info = {} # request_id -> chunk_segment_info
 
     # ==================== Device utilities ====================
 
@@ -668,8 +670,11 @@ class Qwen3OmniMoeForConditionalGeneration(
                 device=self._module_device(self.talker),
                 dtype=torch.long,
             )
+
+        code_predictor_codes = code_predictor_codes.squeeze(0).transpose(0, 1)  # [seq_len, num_code_groups]
         inputs_embeds = (inputs_embeds + text_step).reshape(-1, self.talker_config.text_config.hidden_size)
-        return inputs_embeds, code_predictor_codes.squeeze(-1)
+        # return inputs_embeds, code_predictor_codes.squeeze(-1)
+        return inputs_embeds, code_predictor_codes
 
     def talker_preprocess_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         # Containers to return per-request updates (e.g., code_predictor_hidden_per_request)
@@ -800,7 +805,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                     update_dict["tts_pad_embed_projected"] = pad_proj.detach().to("cpu").contiguous()
             except Exception:
                 pass
-        logger.info(f"talker_preprocess_prefill: update_dict {update_dict}, req_input_ids shape: {req_input_ids.shape}, req_embeds shape: {req_embeds.shape}")
+        # logger.info(f"talker_preprocess_prefill: update_dict {update_dict}, req_input_ids shape: {req_input_ids.shape}, req_embeds shape: {req_embeds.shape}")
         return req_input_ids, req_embeds, update_dict
 
     def _thinker_to_talker_prefill(
@@ -821,13 +826,18 @@ class Qwen3OmniMoeForConditionalGeneration(
         Returns:
             (input_ids, input_embeds) for talker
         """
+        logger.info(f"_thinker_to_talker_prefill thinker_embed {thinker_embed.shape}, thinker_hidden {thinker_hidden.shape}, input_ids {input_ids.shape}, thinker_result_ids {thinker_result_ids.shape}")
+        im_start_positions = torch.nonzero(input_ids[0] == self.config.im_start_token_id).squeeze()
+        chunk_size = torch.tensor([thinker_result_ids.shape[-1]], device=input_ids.device, dtype=input_ids.dtype)
         im_start_indexes = torch.cat(
             (
-                torch.nonzero(input_ids[0] == self.config.im_start_token_id).squeeze(),
-                torch.tensor([thinker_result_ids.shape[-1]], device=input_ids.device, dtype=input_ids.dtype),
+                im_start_positions,
+                chunk_size,
             ),
             dim=-1,
         )  # Shape [n_starts + 1]; Take batch 0 since batched inference is not supported here.
+        # input_ids is full sequence ids, im_start_indexes is the start indexes of each segment in the full sequence
+        logger.info(f"im_start_indexes: {im_start_indexes}") 
         multimodal_mask = (
             (thinker_result_ids == self.thinker_config.audio_token_id) |
             (thinker_result_ids == self.thinker_config.image_token_id) |
@@ -859,10 +869,10 @@ class Qwen3OmniMoeForConditionalGeneration(
         tts_eos_embed = _proj_from_thinker(tts_eos_thinker)
         tts_pad_embed = _proj_from_thinker(tts_pad_thinker)
         self.tts_pad_embed = tts_pad_embed
-        logger.debug(f"tts_bos_embed: {tts_bos_embed.shape}")
-        logger.debug(f"tts_eos_embed: {tts_eos_embed.shape}")
-        logger.debug(f"tts_pad_embed: {tts_pad_embed.shape}")
-        logger.debug(f"im_start_indexes: {im_start_indexes}")
+        logger.info(f"tts_bos_embed: {tts_bos_embed.shape}")
+        logger.info(f"tts_eos_embed: {tts_eos_embed.shape}")
+        logger.info(f"tts_pad_embed: {tts_pad_embed.shape}")
+        logger.info(f"im_start_indexes: {im_start_indexes}")
 
         talker_input_embeds = []  # [1 t d]
         talker_input_ids = []
@@ -871,79 +881,88 @@ class Qwen3OmniMoeForConditionalGeneration(
         # Calculate chunk boundaries in full sequence coordinates
         chunk_start = chunk_offset
         chunk_end = chunk_offset + thinker_result_ids.shape[-1]
+        segment_start_tmp = chunk_start
 
-        logger.debug(f"Processing chunk [{chunk_start}:{chunk_end}] out of full sequence")
+        logger.info(f"Processing chunk [{chunk_start}:{chunk_end}] out of full sequence")
 
         # For every chatml parts in the full sequence
         for i in range(len(im_start_indexes) - 1):
+            logger.info(f"Processing {i} of {len(im_start_indexes) - 1}")
             # Segment boundaries in full sequence coordinates
-            im_start_index_full = im_start_indexes[i].item()
-            segment_end_index_full = im_start_indexes[i + 1].item() + chunk_offset
-
-            # Skip segments that don't overlap with current chunk
-            if segment_end_index_full <= chunk_start or im_start_index_full >= chunk_end:
-                logger.debug(
-                    f"Skipping segment [{im_start_index_full}:{segment_end_index_full}] - no overlap with chunk"
-                )
-                continue
-
-            # Calculate the overlap between segment and chunk
-            overlap_start = max(im_start_index_full, chunk_start)
-            overlap_end = min(segment_end_index_full, chunk_end)
-
-            # Convert to chunk-local coordinates (indices into the chunk tensors)
-            local_start = overlap_start - chunk_start
-            local_end = overlap_end - chunk_start
-
-            logger.debug(
-                f"Processing segment [{im_start_index_full}:{segment_end_index_full}] "
-                f"overlap [{overlap_start}:{overlap_end}] "
-                f"local [{local_start}:{local_end}]"
-            )
-
-            # Get role token from full sequence
-            role_token = input_ids[0][im_start_index_full + 1]
-            logger.debug(f"role_token: {role_token}")
-            logger.debug(f"multimodal_mask: {multimodal_mask.shape}")
-            logger.debug(f"thinker_hidden: {thinker_hidden.shape}")
-            logger.debug(f"thinker_embed: {thinker_embed.shape}")
-
-            # Talker should ignore thinker system prompt
-            if (role_token == self.config.system_token_id).item():
-                continue
-            # Talker takes word embeddings for tokens and hidden state from `accept_hidden_layer` for multimodal inputs
-            elif (role_token == self.config.user_token_id).item():
-                # Extract the overlapping part from chunk tensors using local coordinates
-                talker_user_part = self._get_talker_user_parts(
-                    local_start, local_end, multimodal_mask, thinker_hidden, thinker_embed
-                )
-                talker_input_embeds.append(talker_user_part)
-                talker_input_ids.append(thinker_result_ids[local_start:local_end])
-            # Take assistant output (for now)
-            elif (role_token == self.config.assistant_token_id).item() and i == len(im_start_indexes) - 2:
-                # Extract the overlapping part from chunk tensors using local coordinates
-                talker_assistant_embeds, talker_assistant_ids, trailing_text_hidden = self._get_talker_assistant_parts(
-                    local_start,
-                    local_end,
-                    speaker_id,
-                    thinker_embed,
-                    tts_pad_embed,
-                    tts_bos_embed,
-                    tts_eos_embed,
-                )
-                talker_input_embeds.append(talker_assistant_embeds)
-                talker_input_ids.append(talker_assistant_ids)
-                # capture trailing text hidden for decode steps
-                try:
-                    if isinstance(trailing_text_hidden, torch.Tensor):
-                        trailing_text_hidden_all = trailing_text_hidden
-                except Exception:
-                    pass
-            # History assistant output (ignore for now)
-            elif (role_token == self.config.assistant_token_id).item() and i != len(im_start_indexes) - 2:
-                continue
+            segment_start_index_full = im_start_indexes[i].item()
+            if i == len(im_start_indexes) - 2:
+                # im_start_indexes[-1].item() is last chunk size
+                segment_end_index_full = segment_start_index_full + im_start_indexes[i + 1].item()  # last segment is the whole sequence
             else:
-                raise AssertionError("Expect role id after <|im_start|> (assistant, user, system)")
+                segment_end_index_full = im_start_indexes[i + 1].item() - 1 
+
+            # skip segments that don't overlap with current chunk
+            if segment_end_index_full <= chunk_start or segment_start_index_full >= chunk_end:
+                logger.info(f"skip segment [{segment_start_index_full}:{segment_end_index_full}]")
+                continue
+
+            # calculate the overlap between segment and chunk
+            execute_segments = [] 
+            # this chunk include part of remaining segment from previous chunk
+            if segment_start_index_full > segment_start_tmp: 
+                remain_segment_start = segment_start_tmp
+                remain_segment_end = segment_start_index_full - 1
+                remain_segment_role_token = self.chunk_segment_info["segment_role_token"]
+                execute_segments.append((remain_segment_start, remain_segment_end, remain_segment_role_token))
+                
+            segment_start = max(segment_start_index_full, chunk_start)
+            segment_end = min(segment_end_index_full, chunk_end)
+            segment_start_tmp = segment_end + 1
+            # Get role token from full sequence
+            segment_role_token = input_ids[0][segment_start_index_full + 1]
+            self.chunk_segment_info["segment_role_token"] = segment_role_token
+            execute_segments.append((segment_start, segment_end, segment_role_token))
+            logger.info(f"multimodal_mask: {multimodal_mask.shape}")
+            logger.info(f"thinker_hidden: {thinker_hidden.shape}")
+            logger.info(f"thinker_embed: {thinker_embed.shape}")
+            logger.info(f"execute_segments: {execute_segments}")
+
+            for segment_start, segment_end, segment_role_token in execute_segments:
+                logger.info(f"Processing segment [{segment_start}:{segment_end}] with role token {segment_role_token}")
+                local_start = segment_start - chunk_start
+                local_end = segment_end - chunk_start
+               
+                # Talker should ignore thinker system prompt
+                if (segment_role_token == self.config.system_token_id).item():
+                    continue
+                # Talker takes word embeddings for tokens and hidden state from `accept_hidden_layer` for multimodal inputs
+                elif (segment_role_token == self.config.user_token_id).item():
+                    # Extract the overlapping part from chunk tensors using local coordinates
+                    talker_user_part = self._get_talker_user_parts(
+                        local_start, local_end, multimodal_mask, thinker_hidden, thinker_embed
+                    )
+                    talker_input_embeds.append(talker_user_part)
+                    talker_input_ids.append(thinker_result_ids[local_start:local_end])
+                # Take assistant output (for now)
+                elif (segment_role_token == self.config.assistant_token_id).item() and i == len(im_start_indexes) - 2:
+                    # Extract the overlapping part from chunk tensors using local coordinates
+                    talker_assistant_embeds, talker_assistant_ids, trailing_text_hidden = self._get_talker_assistant_parts(
+                        local_start,
+                        local_end,
+                        speaker_id,
+                        thinker_embed,
+                        tts_pad_embed,
+                        tts_bos_embed,
+                        tts_eos_embed,
+                    )
+                    talker_input_embeds.append(talker_assistant_embeds)
+                    talker_input_ids.append(talker_assistant_ids)
+                    # capture trailing text hidden for decode steps
+                    try:
+                        if isinstance(trailing_text_hidden, torch.Tensor):
+                            trailing_text_hidden_all = trailing_text_hidden
+                    except Exception:
+                        pass
+                # History assistant output (ignore for now)
+                elif (segment_role_token == self.config.assistant_token_id).item() and i != len(im_start_indexes) - 2:
+                    continue
+                else:
+                    raise AssertionError("Expect role id after <|im_start|> (assistant, user, system)")
 
         # Concatenate results (may be empty if no complete segments in this chunk)
         if len(talker_input_embeds) > 0:
@@ -951,7 +970,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             talker_input_id = torch.cat([embed.to(input_ids.device) for embed in talker_input_ids], dim=0)
         else:
             # Return empty tensors if no segments to process in this chunk
-            logger.debug("No complete segments in this chunk, returning empty tensors")
+            logger.info("No complete segments in this chunk, returning empty tensors")
             talker_input_embed = torch.zeros(
                 (0, thinker_embed.shape[-1]), device=input_ids.device, dtype=thinker_embed.dtype
             )
@@ -1010,6 +1029,15 @@ class Qwen3OmniMoeForConditionalGeneration(
         assistant_hidden = self.talker.text_projection(thinker_embed[im_start_index:segment_end_index]).to(
             tts_pad_embed.device
         )  # [t, d]
+      
+        logger.warning(
+            f"_get_talker_assistant_parts: assistant_hidden shape={assistant_hidden.shape}, "
+            f"segment range=[{im_start_index}:{segment_end_index}], "
+            f"thinker_embed shape={thinker_embed.shape}"
+        )
+        
+        # [3 tokens] + [4 pad] + [1 BOS] + [1 first text] = 9 tokens
+        # TODO： check why 1st text token is empty
         assistant_text_hidden = torch.cat(
             (
                 assistant_hidden[:3],
@@ -1031,6 +1059,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             device=tts_pad_embed.device,
             dtype=torch.long,
         )
+        embed_input_ids = self.talker.embed_input_ids(codec_special_tokens).to(device=tts_pad_embed.device, dtype=torch.bfloat16)
         assistant_codec_hidden = torch.cat(
             (
                 torch.zeros(
@@ -1038,7 +1067,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                     device=tts_pad_embed.device,
                     dtype=torch.bfloat16,
                 ),
-                self.talker.embed_input_ids(codec_special_tokens).to(device=tts_pad_embed.device, dtype=torch.bfloat16),
+                embed_input_ids,
             ),
             dim=0,
         )
@@ -1049,7 +1078,7 @@ class Qwen3OmniMoeForConditionalGeneration(
             ),
             dim=0,
         )
-
+        logger.info(f"assistant_codec_hidden: {assistant_codec_hidden.shape}, assistant_text_hidden: {assistant_text_hidden.shape}, embed_input_ids {embed_input_ids.shape}")
         input_embeds = assistant_text_hidden + assistant_codec_hidden
         input_ids = torch.full(
             (assistant_text_hidden.shape[0],),
