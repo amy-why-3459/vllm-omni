@@ -61,7 +61,8 @@ class GPUGenerationModelRunner(OmniGPUModelRunner):
     ) -> OmniModelRunnerOutput | IntermediateTensors:
         with record_function_or_nullcontext("Preprocess"):
             with self.synchronize_input_prep():
-                self._update_request_states(scheduler_output)
+                if self.model_config.async_chunk:
+                    self._update_request_states(scheduler_output)
                 self._update_states(scheduler_output)
                 if not scheduler_output.total_num_scheduled_tokens:
                     return EMPTY_MODEL_RUNNER_OUTPUT

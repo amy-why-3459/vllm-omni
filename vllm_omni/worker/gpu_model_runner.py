@@ -723,8 +723,11 @@ class OmniGPUModelRunner(GPUModelRunner):
             # TODO(Peiqi): do we have a more elegant way to do this?
             if hasattr(self.model, "has_postprocess") and self.model.has_postprocess:
                 for req_index, req_id in enumerate(self.input_batch.req_ids):
-                    req_infos = self._get_additional_information(scheduler_output, req_id)
-                    req_infos = self._get_additional_information(scheduler_output, req_id)
+                    if self.model_config.async_chunk:
+                        req_infos = self._get_additional_information(scheduler_output, req_id)
+                    else:
+                        req_state = self.requests.get(req_id)
+                        req_infos = getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
                     start_offset = int(self.query_start_loc.cpu[req_index])
                     sched_tokens = int(num_scheduled_tokens_np[req_index])
                     s, e = start_offset, start_offset + sched_tokens
@@ -959,7 +962,7 @@ class OmniGPUModelRunner(GPUModelRunner):
                             req_input_ids, req_embeds, last_talker_hidden, text_step
                         )
                         update_dict["code_predictor_codes"] = code_predictor_codes
-                        logger.info(f"talker_mtp: update_dict {update_dict}, code_predictor_codes shape: {code_predictor_codes.shape}")
+                        # logger.info(f"talker_mtp: update_dict {update_dict}, code_predictor_codes shape: {code_predictor_codes.shape}")
                 # TODO(Peiqi): the merge stage could move out from the critical path
                 self._merge_additional_information_update(req_id, update_dict)
 

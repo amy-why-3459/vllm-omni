@@ -400,7 +400,7 @@ def run_multimodal_generation(args) -> None:
     )
 
     # Test multiple concurrent completions
-    num_concurrent_requests = 5
+    num_concurrent_requests = args.num_concurrent_requests
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=num_concurrent_requests) as executor:
         # Submit multiple completion requests concurrently
@@ -517,6 +517,12 @@ def parse_args():
         "--stream",
         action="store_true",
         help="Stream the response.",
+    )
+    parser.add_argument(
+        "--num-concurrent-requests",
+        type=int,
+        default=1,
+        help="Number of concurrent requests to send. Default is 1.",
     )
 
     return parser.parse_args()
