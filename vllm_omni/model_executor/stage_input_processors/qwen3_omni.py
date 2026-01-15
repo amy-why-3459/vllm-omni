@@ -220,7 +220,6 @@ def talker2code2wav_async_chunk(
 
     codec_codes = (
         code_predictor_codes.to(torch.long)
-        .transpose(0, 1)
         .cpu()
         .to(torch.long)
         .reshape(-1)

@@ -388,17 +388,6 @@ def run_multimodal_generation(args) -> None:
     else:
         output_modalities = None
 
-    chat_completion = client.chat.completions.create(
-        messages=[
-            get_system_prompt(),
-            prompt,
-        ],
-        model=model_name,
-        modalities=output_modalities,
-        extra_body=extra_body,
-        stream=args.stream,
-    )
-
     # Test multiple concurrent completions
     num_concurrent_requests = args.num_concurrent_requests
 

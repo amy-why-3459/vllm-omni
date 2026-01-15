@@ -794,6 +794,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                 else:
                     req_infos["last_talker_hidden"] = additional_information_cpu.get("last_talker_hidden", None)
                     req_infos["num_processed_thinker_tokens"] = additional_information_cpu.get("num_processed_thinker_tokens", 0)
+                    if "trailing_text_hidden" in additional_information_cpu:
+                        req_infos["trailing_text_hidden"] = additional_information_cpu["trailing_text_hidden"]
                 if not isinstance(req_infos, dict):
                     req_infos = None
 

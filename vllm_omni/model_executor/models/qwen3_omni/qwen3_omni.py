@@ -671,10 +671,8 @@ class Qwen3OmniMoeForConditionalGeneration(
                 dtype=torch.long,
             )
 
-        code_predictor_codes = code_predictor_codes.squeeze(0).transpose(0, 1)  # [seq_len, num_code_groups]
         inputs_embeds = (inputs_embeds + text_step).reshape(-1, self.talker_config.text_config.hidden_size)
-        # return inputs_embeds, code_predictor_codes.squeeze(-1)
-        return inputs_embeds, code_predictor_codes
+        return inputs_embeds, code_predictor_codes.squeeze(-1)
 
     def talker_preprocess_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         # Containers to return per-request updates (e.g., code_predictor_hidden_per_request)
@@ -749,11 +747,11 @@ class Qwen3OmniMoeForConditionalGeneration(
         chunk_offset = num_processed_thinker_tokens
         chunk_size = min(current_chunk_size, total_thinker_tokens)
 
-        thinker_embed_chunk = thinker_sequence_embeds[:chunk_size]
-        thinker_hidden_chunk = thinker_hidden_states[:chunk_size]
-        ids_chatml_chunk = ids_chatml[:chunk_size]
+        thinker_embed_chunk = thinker_sequence_embeds
+        thinker_hidden_chunk = thinker_hidden_states
+        ids_chatml_chunk = ids_chatml
 
-        thinker_sequences_chunk = thinker_sequences[:chunk_size]
+        thinker_sequences_chunk = thinker_sequences
 
         # Process only the current chunk
         speaker_id = self._get_text_spk_token_id(voice_type)
@@ -777,7 +775,7 @@ class Qwen3OmniMoeForConditionalGeneration(
         is_last_chunk = chunk_size >= total_thinker_tokens
 
         # Handle trailing_text_hidden only on the last chunk
-        if is_last_chunk:
+        if True:
             try:
                 if isinstance(trailing_text_hidden, torch.Tensor) and trailing_text_hidden.numel() > 0:
                     if trailing_text_hidden.ndim == 2:
@@ -793,7 +791,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                         # compatible with old shape [1,S,D]
                         rem_tail = trailing_text_hidden.squeeze(0)
                     if rem_tail.shape[0] > 0:
-                        update_dict["tailing_text_hidden"] = rem_tail.detach().to("cpu").contiguous()
+                        update_dict["trailing_text_hidden"] = rem_tail.detach().to("cpu").contiguous()
                 # Also persist projected tts_pad for decode fallback if needed
                 if isinstance(tts_pad_thinker, torch.Tensor):
                     pad_in = tts_pad_thinker
@@ -981,7 +979,7 @@ class Qwen3OmniMoeForConditionalGeneration(
     def talker_preprocess_decode(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         update_dict: dict[str, dict] = {}
         try:
-            q_tail = info_dict.get("tailing_text_hidden")
+            q_tail = info_dict.get("trailing_text_hidden")
             if isinstance(q_tail, torch.Tensor) and q_tail.numel() > 0:
                 use_vec = q_tail[0:1, :]
                 new_q_tail = (
@@ -990,7 +988,7 @@ class Qwen3OmniMoeForConditionalGeneration(
                     else self.tts_pad_embed.to(input_embeds.device, dtype=input_embeds.dtype)
                 )
                 text_step = use_vec.to(input_embeds.device, dtype=input_embeds.dtype)
-                update_dict["tailing_text_hidden"] = new_q_tail
+                update_dict["trailing_text_hidden"] = new_q_tail
             else:
                 text_step = self.tts_pad_embed.to(input_embeds.device, dtype=input_embeds.dtype)
 
