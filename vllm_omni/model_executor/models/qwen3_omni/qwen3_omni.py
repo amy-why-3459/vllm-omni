@@ -671,10 +671,8 @@ class Qwen3OmniMoeForConditionalGeneration(
                 dtype=torch.long,
             )
 
-        code_predictor_codes = code_predictor_codes.squeeze(0).transpose(0, 1)  # [seq_len, num_code_groups]
         inputs_embeds = (inputs_embeds + text_step).reshape(-1, self.talker_config.text_config.hidden_size)
-        # return inputs_embeds, code_predictor_codes.squeeze(-1)
-        return inputs_embeds, code_predictor_codes
+        return inputs_embeds, code_predictor_codes.squeeze(-1)
 
     def talker_preprocess_prefill(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         # Containers to return per-request updates (e.g., code_predictor_hidden_per_request)
