@@ -268,7 +268,6 @@ def talker2code2wav(
         codec_codes = (
             output.multimodal_output["code_predictor_codes"][-seq_len:]
             .to(torch.long)
-            .transpose(0, 1)
             .cpu()
             .to(torch.long)
             .reshape(-1)
