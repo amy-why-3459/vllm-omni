@@ -2,101 +2,101 @@
 
 
 def test_import():
-    """测试能导入OmniARScheduler"""
+    """Test that OmniARScheduler can be imported"""
     try:
         from vllm_omni.core.sched.omni_ar_scheduler import OmniARScheduler
-        print(f"✅ 成功导入 OmniARScheduler")
+        print(f"✅ Successfully imported OmniARScheduler")
         return OmniARScheduler
     except ImportError as e:
-        print(f"❌ 导入失败: {e}")
+        print(f"❌ Import failed: {e}")
         raise
 
 
 def test_class_exists():
-    """测试类存在并检查基本属性"""
+    """Test that the class exists and check basic attributes"""
     OmniARScheduler = test_import()
     
-    # 检查类名
+    # Check class name
     assert OmniARScheduler.__name__ == "OmniARScheduler"
-    print(f"✅ 类名正确: {OmniARScheduler.__name__}")
+    print(f"✅ Class name is correct: {OmniARScheduler.__name__}")
     
-    # 检查关键方法
+    # Check required methods
     required_methods = ['__init__', 'schedule', 'update_from_output']
     for method in required_methods:
-        assert hasattr(OmniARScheduler, method), f"缺少方法: {method}"
-        print(f"✅ 有方法: {method}")
+        assert hasattr(OmniARScheduler, method), f"Missing method: {method}"
+        print(f"✅ Method exists: {method}")
     
     return OmniARScheduler
 
 
 def test_method_signatures():
-    """测试方法签名"""
+    """Test method signatures"""
     OmniARScheduler = test_class_exists()
     
     import inspect
     
-    # 检查__init__签名
+    # Check __init__ signature
     init_sig = inspect.signature(OmniARScheduler.__init__)
-    print(f"✅ __init__ 签名: {init_sig}")
+    print(f"✅ __init__ signature: {init_sig}")
     
-    # 检查schedule签名
+    # Check schedule signature
     schedule_sig = inspect.signature(OmniARScheduler.schedule)
-    print(f"✅ schedule 签名: {schedule_sig}")
+    print(f"✅ schedule signature: {schedule_sig}")
     
-    # 检查update_from_output签名
+    # Check update_from_output signature
     update_sig = inspect.signature(OmniARScheduler.update_from_output)
-    print(f"✅ update_from_output 签名: {update_sig}")
+    print(f"✅ update_from_output signature: {update_sig}")
     
     return OmniARScheduler
 
 
 def test_source_code_checks():
-    """检查源代码中的关键字符串"""
+    """Check key strings in source code"""
     OmniARScheduler = test_method_signatures()
     
     import inspect
     
-    # 检查schedule方法中的关键代码
+    # Check key code in schedule method
     try:
         source = inspect.getsource(OmniARScheduler.schedule)
         
-        # 检查是否有omni相关代码
+        # Check omni-related logic
         checks = [
-            ("omni_connector", "Omni连接器"),
-            ("get_chunk", "获取chunk"),
-            ("async_chunk", "异步chunk"),
+            ("omni_connector", "Omni connector"),
+            ("get_chunk", "chunk fetching"),
+            ("async_chunk", "async chunk"),
         ]
         
         for keyword, description in checks:
             if keyword in source:
-                print(f"✅ schedule方法包含{description}代码")
+                print(f"✅ schedule method contains {description} logic")
             else:
-                print(f"⚠️  schedule方法不包含{description}代码")
+                print(f"⚠️  schedule method does not contain {description} logic")
     except (TypeError, OSError):
-        print("⚠️  无法获取schedule方法源代码")
+        print("⚠️  Unable to retrieve schedule method source code")
     
-    # 检查update_from_output方法
+    # Check update_from_output method
     try:
         source = inspect.getsource(OmniARScheduler.update_from_output)
         
         checks = [
-            ("put_chunk", "放置chunk"),
-            ("custom_process", "自定义处理"),
+            ("put_chunk", "chunk placement"),
+            ("custom_process", "custom processing"),
         ]
         
         for keyword, description in checks:
             if keyword in source:
-                print(f"✅ update_from_output方法包含{description}代码")
+                print(f"✅ update_from_output method contains {description} logic")
             else:
-                print(f"⚠️  update_from_output方法不包含{description}代码")
+                print(f"⚠️  update_from_output method does not contain {description} logic")
     except (TypeError, OSError):
-        print("⚠️  无法获取update_from_output方法源代码")
+        print("⚠️  Unable to retrieve update_from_output method source code")
     
     return OmniARScheduler
 
 
 def test_dependency_imports():
-    """测试依赖模块能否导入"""
+    """Test whether dependency modules can be imported"""
     import importlib
     
     dependencies = [
@@ -108,15 +108,15 @@ def test_dependency_imports():
     for dep in dependencies:
         try:
             importlib.import_module(dep)
-            print(f"✅ 能导入依赖: {dep}")
+            print(f"✅ Dependency imported successfully: {dep}")
         except ImportError as e:
-            print(f"⚠️  无法导入依赖 {dep}: {e}")
+            print(f"⚠️  Failed to import dependency {dep}: {e}")
 
 
 def run_all_tests():
-    """运行所有测试"""
+    """Run all tests"""
     print("=" * 60)
-    print("开始 OmniARScheduler 测试")
+    print("Starting OmniARScheduler tests")
     print("=" * 60)
     
     try:
@@ -136,13 +136,13 @@ def run_all_tests():
         print()
         
         print("=" * 60)
-        print("🎉 所有测试通过!")
+        print("🎉 All tests passed!")
         print("=" * 60)
         return True
         
     except Exception as e:
         print("=" * 60)
-        print(f"❌ 测试失败: {e}")
+        print(f"❌ Tests failed: {e}")
         print("=" * 60)
         import traceback
         traceback.print_exc()

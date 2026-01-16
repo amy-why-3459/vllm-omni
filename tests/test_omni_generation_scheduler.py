@@ -2,75 +2,75 @@
 
 
 def test_import():
-    """测试能导入OmniGenerationScheduler"""
+    """Test that OmniGenerationScheduler can be imported"""
     try:
         from vllm_omni.core.sched.omni_generation_scheduler import OmniGenerationScheduler
-        print(f"✅ 成功导入 OmniGenerationScheduler")
+        print(f"✅ Successfully imported OmniGenerationScheduler")
         return True
     except ImportError as e:
-        print(f"❌ 导入失败: {e}")
+        print(f"❌ Import failed: {e}")
         return False
 
 
 def test_class_exists():
-    """测试类存在并检查基本属性"""
+    """Test that the class exists and check basic attributes"""
     from vllm_omni.core.sched.omni_generation_scheduler import OmniGenerationScheduler
     
-    # 检查类名
+    # Check class name
     assert OmniGenerationScheduler.__name__ == "OmniGenerationScheduler"
-    print(f"✅ 类名正确: {OmniGenerationScheduler.__name__}")
+    print(f"✅ Class name correct: {OmniGenerationScheduler.__name__}")
     
-    # 检查关键方法
+    # Check required methods
     required_methods = ['__init__', 'schedule', 'update_from_output']
     for method in required_methods:
-        assert hasattr(OmniGenerationScheduler, method), f"缺少方法: {method}"
-        print(f"✅ 有方法: {method}")
+        assert hasattr(OmniGenerationScheduler, method), f"Missing method: {method}"
+        print(f"✅ Has method: {method}")
     
     return True
 
 
 def test_method_signatures():
-    """测试方法签名"""
+    """Test method signatures"""
     from vllm_omni.core.sched.omni_generation_scheduler import OmniGenerationScheduler
     import inspect
     
-    # 检查__init__签名
+    # Check __init__ signature
     init_sig = inspect.signature(OmniGenerationScheduler.__init__)
-    print(f"✅ __init__ 签名: {init_sig}")
+    print(f"✅ __init__ signature: {init_sig}")
     
-    # 检查schedule签名
+    # Check schedule signature
     schedule_sig = inspect.signature(OmniGenerationScheduler.schedule)
-    print(f"✅ schedule 签名: {schedule_sig}")
+    print(f"✅ schedule signature: {schedule_sig}")
     
-    # 检查update_from_output签名
+    # Check update_from_output signature
     update_sig = inspect.signature(OmniGenerationScheduler.update_from_output)
-    print(f"✅ update_from_output 签名: {update_sig}")
+    print(f"✅ update_from_output signature: {update_sig}")
     
     return True
 
 
 def test_simple_init():
-    """简单测试初始化逻辑 - 使用正确的mock方式"""
+    """Simple test for initialization logic - using correct mocking approach"""
     from vllm_omni.core.sched.omni_generation_scheduler import OmniGenerationScheduler
     from unittest.mock import Mock, patch, PropertyMock
     
-    # 方法1: 完全mock __init__ 方法
+    # Method 1: Fully mock the __init__ method
     with patch.object(OmniGenerationScheduler, '__init__', return_value=None):
         scheduler = OmniGenerationScheduler()
         scheduler.vllm_config = None
         scheduler.omni_connector = None
         scheduler.stage_id = None
         
-        # 验证可以创建实例
+        # Verify instance can be created
         assert scheduler is not None
-        print("✅ 可以创建OmniGenerationScheduler实例")
+        print("✅ Can create OmniGenerationScheduler instance")
     
-    # 方法2: 直接测试源代码中的初始化逻辑
-    print("检查__init__方法中的关键代码...")
+    # Method 2: Directly inspect initialization logic in source code
+    print("Checking key code in __init__ method...")
     import inspect
     source = inspect.getsource(OmniGenerationScheduler.__init__)
     
-    # 检查是否包含关键逻辑
+    # Check for key logic
     keywords_to_check = [
         'model_config',
         'async_chunk', 
@@ -81,22 +81,22 @@ def test_simple_init():
     
     for keyword in keywords_to_check:
         if keyword in source:
-            print(f"✅ __init__ 方法包含 '{keyword}'")
+            print(f"✅ __init__ method contains '{keyword}'")
         else:
-            print(f"⚠️  __init__ 方法不包含 '{keyword}'")
+            print(f"⚠️  __init__ method does not contain '{keyword}'")
     
     return True
 
 
 def test_schedule_method_code():
-    """检查schedule方法中的关键代码"""
+    """Check key code in schedule method"""
     from vllm_omni.core.sched.omni_generation_scheduler import OmniGenerationScheduler
     import inspect
     
     try:
         source = inspect.getsource(OmniGenerationScheduler.schedule)
         
-        # 检查是否包含omni相关代码
+        # Check for omni-related code
         omni_keywords = [
             'omni_connector',
             'get_chunk_for_generation',
@@ -110,46 +110,46 @@ def test_schedule_method_code():
                 found.append(keyword)
         
         if found:
-            print(f"✅ schedule方法包含Omni代码: {', '.join(found)}")
+            print(f"✅ schedule method contains Omni code: {', '.join(found)}")
         else:
-            print("⚠️  schedule方法不包含明显的Omni代码")
+            print("⚠️  schedule method does not contain obvious Omni code")
         
         return True
     except (TypeError, OSError) as e:
-        print(f"⚠️  无法获取schedule方法源代码: {e}")
-        return True  # 不是致命错误
+        print(f"⚠️  Cannot get source code of schedule method: {e}")
+        return True  # Not a fatal error
 
 
 def test_update_from_output_code():
-    """检查update_from_output方法中的关键代码"""
+    """Check key code in update_from_output method"""
     from vllm_omni.core.sched.omni_generation_scheduler import OmniGenerationScheduler
     import inspect
     
     try:
         source = inspect.getsource(OmniGenerationScheduler.update_from_output)
         
-        # 检查关键逻辑
+        # Check key logic
         checks = [
-            ('FINISHED_STOPPED', '完成状态检查'),
-            ('omni_connector', 'Omni连接器检查'),
-            ('num_computed_tokens', '计算token数检查'),
-            ('num_prompt_tokens', '提示token数检查')
+            ('FINISHED_STOPPED', 'finished state check'),
+            ('omni_connector', 'Omni connector check'),
+            ('num_computed_tokens', 'computed token count check'),
+            ('num_prompt_tokens', 'prompt token count check')
         ]
         
         for keyword, description in checks:
             if keyword in source:
-                print(f"✅ update_from_output包含'{description}'代码")
+                print(f"✅ update_from_output contains '{description}' code")
             else:
-                print(f"⚠️  update_from_output不包含'{description}'代码")
+                print(f"⚠️  update_from_output does not contain '{description}' code")
         
         return True
     except (TypeError, OSError) as e:
-        print(f"⚠️  无法获取update_from_output方法源代码: {e}")
-        return True  # 不是致命错误
+        print(f"⚠️  Cannot get source code of update_from_output method: {e}")
+        return True  # Not a fatal error
 
 
 def test_import_dependencies():
-    """测试相关导入"""
+    """Test related imports"""
     import importlib
     
     dependencies = [
@@ -162,69 +162,69 @@ def test_import_dependencies():
     for dep in dependencies:
         try:
             importlib.import_module(dep)
-            print(f"✅ 能导入: {dep}")
+            print(f"✅ Can import: {dep}")
         except ImportError as e:
-            print(f"⚠️  无法导入 {dep}: {e}")
+            print(f"⚠️  Cannot import {dep}: {e}")
             all_ok = False
     
     return all_ok
 
 
 def run_all_tests():
-    """运行所有测试"""
+    """Run all tests"""
     print("=" * 60)
-    print("开始 OmniGenerationScheduler 测试")
+    print("Starting OmniGenerationScheduler tests")
     print("=" * 60)
     
     results = []
     
     tests = [
-        ("导入测试", test_import),
-        ("类存在测试", test_class_exists),
-        ("方法签名测试", test_method_signatures),
-        ("简单初始化测试", test_simple_init),
-        ("schedule方法代码检查", test_schedule_method_code),
-        ("update_from_output代码检查", test_update_from_output_code),
-        ("依赖导入测试", test_import_dependencies),
+        ("Import test", test_import),
+        ("Class existence test", test_class_exists),
+        ("Method signature test", test_method_signatures),
+        ("Simple initialization test", test_simple_init),
+        ("Schedule method code check", test_schedule_method_code),
+        ("Update_from_output code check", test_update_from_output_code),
+        ("Dependency import test", test_import_dependencies),
     ]
     
     for test_name, test_func in tests:
-        print(f"\n▶️  运行: {test_name}")
+        print(f"\n▶️  Running: {test_name}")
         try:
             success = test_func()
             if success:
                 results.append((test_name, True, ""))
-                print(f"✅ {test_name} 通过")
+                print(f"✅ {test_name} passed")
             else:
-                results.append((test_name, False, "返回False"))
-                print(f"❌ {test_name} 失败")
+                results.append((test_name, False, "Returned False"))
+                print(f"❌ {test_name} failed")
         except AssertionError as e:
-            results.append((test_name, False, f"断言失败: {e}"))
-            print(f"❌ {test_name} 失败: {e}")
+            results.append((test_name, False, f"Assertion failed: {e}"))
+            print(f"❌ {test_name} failed: {e}")
         except Exception as e:
-            results.append((test_name, False, f"异常: {e}"))
-            print(f"⚠️  {test_name} 错误: {e}")
+            results.append((test_name, False, f"Exception: {e}"))
+            print(f"⚠️  {test_name} error: {e}")
     
-    # 打印总结
+    # Print summary
     print("\n" + "=" * 60)
-    print("测试结果总结:")
+    print("Test results summary:")
     print("=" * 60)
     
     passed = sum(1 for _, success, _ in results if success)
     total = len(results)
     
     for test_name, success, error in results:
-        status = "✅ 通过" if success else "❌ 失败"
+        status = "✅ Passed" if success else "❌ Failed"
         print(f"{status}: {test_name}")
         if error:
-            print(f"     错误: {error}")
+            print(f"     Error: {error}")
     
-    print(f"\n总计: {passed}/{total} 个测试通过")
+    print(f"\nTotal: {passed}/{total} tests passed")
     
     if passed == total:
-        print("🎉 所有测试通过!")
+        print("🎉 All tests passed!")
     else:
-        print("⚠️  部分测试失败")
+        print("⚠️  Some tests failed")
     
     print("=" * 60)
     

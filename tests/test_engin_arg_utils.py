@@ -2,37 +2,37 @@
 
 
 def test_import():
-    """测试能导入OmniEngineArgs"""
+    """Test that OmniEngineArgs can be imported"""
     try:
         from vllm_omni.engine.arg_utils import OmniEngineArgs, AsyncOmniEngineArgs
-        print(f"✅ 成功导入 OmniEngineArgs 和 AsyncOmniEngineArgs")
+        print(f"✅ Successfully imported OmniEngineArgs and AsyncOmniEngineArgs")
         return True
     except ImportError as e:
-        print(f"❌ 导入失败: {e}")
+        print(f"❌ Import failed: {e}")
         return False
 
 
 def test_class_exists():
-    """测试类存在并检查继承关系"""
+    """Test that classes exist and check inheritance"""
     from vllm_omni.engine.arg_utils import OmniEngineArgs, AsyncOmniEngineArgs
     
-    # 检查类名
+    # Check class names
     assert OmniEngineArgs.__name__ == "OmniEngineArgs"
     assert AsyncOmniEngineArgs.__name__ == "AsyncOmniEngineArgs"
-    print(f"✅ 类名正确")
+    print(f"✅ Class names are correct")
     
     return True
 
 
 def test_new_fields():
-    """测试新增字段的默认值 - 不实例化，直接检查源码"""
+    """Test default values of newly added fields - inspect source without instantiation"""
     from vllm_omni.engine.arg_utils import OmniEngineArgs
     import inspect
     
-    # 获取源代码检查字段定义
+    # Get source code to check field definitions
     source = inspect.getsource(OmniEngineArgs)
     
-    # 检查字段定义
+    # Check field definitions
     field_definitions = [
         ('stage_id: int = 0', 'stage_id'),
         ('model_stage: str = "thinker"', 'model_stage'),
@@ -45,19 +45,19 @@ def test_new_fields():
     
     for field_def, field_name in field_definitions:
         if field_def in source:
-            print(f"✅ 包含字段: {field_name}")
+            print(f"✅ Field present: {field_name}")
         else:
-            print(f"⚠️  不包含字段: {field_name}")
+            print(f"⚠️  Field missing: {field_name}")
     
     return True
 
 
 def test_method_existence():
-    """测试方法存在性"""
+    """Test method existence"""
     from vllm_omni.engine.arg_utils import OmniEngineArgs, AsyncOmniEngineArgs
     import inspect
     
-    # 检查方法
+    # Methods to check
     methods_to_check = [
         ('OmniEngineArgs', 'create_model_config'),
         ('OmniEngineArgs', 'draw_hf_text_config'),
@@ -68,56 +68,56 @@ def test_method_existence():
     for class_name, method_name in methods_to_check:
         cls = OmniEngineArgs if class_name == 'OmniEngineArgs' else AsyncOmniEngineArgs
         
-        # 检查方法是否存在
+        # Check method existence
         if hasattr(cls, method_name):
-            print(f"✅ {class_name} 有方法: {method_name}")
+            print(f"✅ {class_name} has method: {method_name}")
             
-            # 尝试获取方法签名（不实际调用）
+            # Try to get method signature (without calling)
             try:
                 sig = inspect.signature(getattr(cls, method_name))
-                print(f"  签名: {sig}")
+                print(f"  Signature: {sig}")
             except:
-                print(f"  无法获取签名")
+                print(f"  Unable to get signature")
         else:
-            print(f"❌ {class_name} 缺少方法: {method_name}")
+            print(f"❌ {class_name} is missing method: {method_name}")
     
     return True
 
 
 def test_create_model_config_logic_check():
-    """检查create_model_config方法的逻辑 - 通过源代码分析"""
+    """Check logic of create_model_config method via source code inspection"""
     from vllm_omni.engine.arg_utils import OmniEngineArgs
     import inspect
     
     try:
         source = inspect.getsource(OmniEngineArgs.create_model_config)
         
-        # 检查关键逻辑
+        # Check key logic
         logic_checks = [
-            ('stage_id', 'stage_id设置'),
-            ('async_chunk', 'async_chunk设置'),
-            ('model_stage', 'model_stage设置'),
-            ('stage_connector_name', 'stage_connector_name设置'),
-            ('stage_connector_extra', 'stage_connector_extra设置'),
-            ('hf_config_name', 'hf_config_name处理'),
-            ('draw_hf_text_config', 'hf_text_config生成')
+            ('stage_id', 'stage_id assignment'),
+            ('async_chunk', 'async_chunk handling'),
+            ('model_stage', 'model_stage assignment'),
+            ('stage_connector_name', 'stage_connector_name assignment'),
+            ('stage_connector_extra', 'stage_connector_extra assignment'),
+            ('hf_config_name', 'hf_config_name handling'),
+            ('draw_hf_text_config', 'hf_text_config generation')
         ]
         
-        print("检查create_model_config方法逻辑:")
+        print("Checking create_model_config method logic:")
         for keyword, description in logic_checks:
             if keyword in source:
-                print(f"  ✅ 包含: {description}")
+                print(f"  ✅ Contains: {description}")
             else:
-                print(f"  ⚠️  不包含: {description}")
+                print(f"  ⚠️  Missing: {description}")
         
         return True
     except (TypeError, OSError) as e:
-        print(f"⚠️  无法获取create_model_config方法源代码: {e}")
+        print(f"⚠️  Unable to retrieve create_model_config source code: {e}")
         return True
 
 
 def test_code_comparison():
-    """对比OmniEngineArgs和AsyncOmniEngineArgs的代码差异"""
+    """Compare code differences between OmniEngineArgs and AsyncOmniEngineArgs"""
     from vllm_omni.engine.arg_utils import OmniEngineArgs, AsyncOmniEngineArgs
     import inspect
     
@@ -125,83 +125,83 @@ def test_code_comparison():
         omni_source = inspect.getsource(OmniEngineArgs)
         async_source = inspect.getsource(AsyncOmniEngineArgs)
         
-        print("代码对比:")
+        print("Code comparison:")
         
-        # 检查是否有共同的字段
+        # Check common fields
         common_fields = ['stage_id', 'model_stage', 'model_arch', 'async_chunk']
         for field in common_fields:
             if f'{field}:' in omni_source and f'{field}:' in async_source:
-                print(f"  ✅ 两个类都有字段: {field}")
+                print(f"  ✅ Both classes contain field: {field}")
             else:
-                print(f"  ⚠️  字段不一致: {field}")
+                print(f"  ⚠️  Field mismatch: {field}")
         
-        # 检查方法
+        # Check methods
         if 'def create_model_config' in omni_source and 'def create_model_config' in async_source:
-            print("  ✅ 两个类都有create_model_config方法")
+            print("  ✅ Both classes have create_model_config method")
         
         if 'def draw_hf_text_config' in omni_source and 'def draw_hf_text_config' in async_source:
-            print("  ✅ 两个类都有draw_hf_text_config方法")
+            print("  ✅ Both classes have draw_hf_text_config method")
         
         return True
     except (TypeError, OSError) as e:
-        print(f"⚠️  无法获取源代码: {e}")
+        print(f"⚠️  Unable to retrieve source code: {e}")
         return True
 
 
 def run_all_tests():
-    """运行所有测试"""
+    """Run all tests"""
     print("=" * 60)
-    print("开始 OmniEngineArgs 测试（终极简化版）")
+    print("Starting OmniEngineArgs tests (fully simplified version)")
     print("=" * 60)
     
     results = []
     
     tests = [
-        ("导入测试", test_import),
-        ("类存在测试", test_class_exists),
-        ("新增字段测试", test_new_fields),
-        ("方法存在性测试", test_method_existence),
-        ("create_model_config逻辑检查", test_create_model_config_logic_check),
-        ("代码对比测试", test_code_comparison),
+        ("Import test", test_import),
+        ("Class existence test", test_class_exists),
+        ("New fields test", test_new_fields),
+        ("Method existence test", test_method_existence),
+        ("create_model_config logic check", test_create_model_config_logic_check),
+        ("Code comparison test", test_code_comparison),
     ]
     
     for test_name, test_func in tests:
-        print(f"\n▶️  运行: {test_name}")
+        print(f"\n▶️  Running: {test_name}")
         try:
             success = test_func()
             if success:
                 results.append((test_name, True, ""))
-                print(f"✅ {test_name} 通过")
+                print(f"✅ {test_name} passed")
             else:
-                results.append((test_name, False, "返回False"))
-                print(f"❌ {test_name} 失败")
+                results.append((test_name, False, "Returned False"))
+                print(f"❌ {test_name} failed")
         except AssertionError as e:
-            results.append((test_name, False, f"断言失败: {e}"))
-            print(f"❌ {test_name} 失败: {e}")
+            results.append((test_name, False, f"Assertion failed: {e}"))
+            print(f"❌ {test_name} failed: {e}")
         except Exception as e:
-            results.append((test_name, False, f"异常: {e}"))
-            print(f"⚠️  {test_name} 错误: {e}")
+            results.append((test_name, False, f"Exception: {e}"))
+            print(f"⚠️  {test_name} error: {e}")
     
-    # 打印总结
+    # Print summary
     print("\n" + "=" * 60)
-    print("测试结果总结:")
+    print("Test summary:")
     print("=" * 60)
     
     passed = sum(1 for _, success, _ in results if success)
     total = len(results)
     
     for test_name, success, error in results:
-        status = "✅ 通过" if success else "❌ 失败"
+        status = "✅ Passed" if success else "❌ Failed"
         print(f"{status}: {test_name}")
         if error:
-            print(f"     错误: {error}")
+            print(f"     Error: {error}")
     
-    print(f"\n总计: {passed}/{total} 个测试通过")
+    print(f"\nTotal: {passed}/{total} tests passed")
     
     if passed == total:
-        print("🎉 所有测试通过!")
+        print("🎉 All tests passed!")
     else:
-        print("⚠️  部分测试失败")
+        print("⚠️  Some tests failed")
     
     print("=" * 60)
     
