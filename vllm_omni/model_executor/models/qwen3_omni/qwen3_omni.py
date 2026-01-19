@@ -975,6 +975,77 @@ class Qwen3OmniMoeForConditionalGeneration(
             talker_input_id = torch.zeros((0,), device=input_ids.device, dtype=torch.long)
 
         return talker_input_id, talker_input_embed, trailing_text_hidden_all
+    def _get_talker_assistant_parts_decode(self, im_start_index, segment_end, speaker_id, thinker_embed, tts_pad_embed, tts_bos_embed, tts_eos_embed):
+        assistant_hidden = self.talker.text_projection(thinker_embed).to(tts_eos_embed.device)
+        logger.info(f"assistant_hidden: {assistant_hidden.shape}")
+        trailing_text_hidden = torch.cat((assistant_hidden, tts_eos_embed), dim=0)
+        logger.info(f"trailing_text_hidden: {trailing_text_hidden.shape}")
+        return trailing_text_hidden
+
+    def _thinker_decode_to_talker_decode(
+        self,
+        thinker_embed: torch.Tensor,
+        thinker_hidden: torch.Tensor,
+        input_ids: torch.Tensor,
+        thinker_result_ids: torch.Tensor,
+        speaker_id,
+        tts_bos_thinker: torch.Tensor | None = None,
+        tts_eos_thinker: torch.Tensor | None = None,
+        tts_pad_thinker: torch.Tensor | None = None,
+        ):
+        """
+        Project thinker outputs to talker inputs during prefill stage.
+        Returns:
+            (input_ids, input_embeds) for talker
+        """
+        logger.info(f"_thinker_decode_to_talker_decode thinker_embed {thinker_embed.shape}, thinker_hidden {thinker_hidden.shape}, input_ids {input_ids.shape}, thinker_result_ids {thinker_result_ids.shape}")
+        im_start_indexes = torch.nonzero(thinker_result_ids == self.config.im_start_token_id).squeeze()
+        logger.info(f"_thinker_decode_to_talker_decode im_start_indexes: {im_start_indexes}")  
+
+        talker_dev = self._module_device(self.talker)
+
+        def _ensure_1x1(x: torch.Tensor) -> torch.Tensor:
+            if x.ndim == 3:
+                return x[0, -1:, :]
+            if x.ndim == 2:
+                return x[-1]
+            return x.view(1, 1, -1)
+
+        def _proj_from_thinker(x_opt: torch.Tensor | None) -> torch.Tensor:
+            if isinstance(x_opt, torch.Tensor) and x_opt.numel() > 0:
+                xin = _ensure_1x1(x_opt).to(talker_dev)
+            else:
+                xin = torch.zeros(
+                    (1, thinker_embed.shape[-1]),
+                    device=talker_dev,
+                    dtype=thinker_embed.dtype,
+                )
+            return self.talker.text_projection(xin).to(input_ids.device)
+
+        tts_bos_embed = _proj_from_thinker(tts_bos_thinker)
+        tts_eos_embed = _proj_from_thinker(tts_eos_thinker)
+        tts_pad_embed = _proj_from_thinker(tts_pad_thinker)
+        self.tts_pad_embed = tts_pad_embed
+        segment_end = thinker_result_ids.shape[-1]
+        # For every chatml parts in the full sequence
+        for i in range(len(im_start_indexes)):
+            logger.info(f"_thinker_decode_to_talker_decode Processing {i} of {len(im_start_indexes)}")
+            # Segment boundaries in full sequence coordinates
+            im_start_index = im_start_indexes[i].item()
+            segment_role_token = thinker_result_ids[im_start_index + 1]
+            if (segment_role_token == self.config.assistant_token_id).item():
+                trailing_text_hidden = self._get_talker_assistant_parts_decode(
+                    im_start_index,
+                    segment_end,
+                    speaker_id,
+                    thinker_embed,
+                    tts_pad_embed,
+                    tts_bos_embed,
+                    tts_eos_embed,
+                )
+                logger.info(f"_thinker_decode_to_talker_decode trailing_text_hidden: {trailing_text_hidden.shape}, trailing_text_hidden: {trailing_text_hidden}")
+                return trailing_text_hidden
+        return None
 
     def _thinker_decode_to_talker_decode(
         self,
@@ -1048,6 +1119,8 @@ class Qwen3OmniMoeForConditionalGeneration(
 
     def talker_preprocess_decode(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         update_dict: dict[str, dict] = {}
+        last_talker_hidden = None
+        text_step = None
         try:
             q_tail =self._thinker_decode_to_talker_decode(info_dict, input_ids.device)
             # q_tail = info_dict.get("trailing_text_hidden")
