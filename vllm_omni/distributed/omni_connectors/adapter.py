@@ -6,6 +6,7 @@
 import time
 from collections.abc import Callable
 from typing import Any
+import torch
 
 from vllm.v1.request import RequestStatus
 
@@ -322,6 +323,18 @@ def put_chunk(connector, pooling_output, request, custom_process_input_func=None
         if not payload_data:
             logger.warning(f"[Stage-{stage_id}] No payload data to send for request {request_id}")
             return
+
+        if stage_id == 0 and chunk_id == 0:
+            if connector.request_payload.get(request_id) is None:
+                connector.request_payload[request_id] = payload_data
+                return
+            else:
+                save_payload = connector.request_payload.get(request_id)
+                payload_data["thinker_embeddings"] = torch.cat(
+                    (save_payload.get("thinker_embeddings"), payload_data.get("thinker_embeddings")), dim=0)
+                payload_data["thinker_hidden_states"] = torch.cat(
+                    (save_payload.get("thinker_hidden_states"), payload_data.get("thinker_hidden_states")), dim=0)
+                logger.info(f"[Stage-{stage_id}] Merged embeddings and hidden states for request {request_id}")
 
         success, size, metadata = connector.put(
             from_stage=str(stage_id), to_stage=str(next_stage_id), put_key=connector_put_key, data=payload_data

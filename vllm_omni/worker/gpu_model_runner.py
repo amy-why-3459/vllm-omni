@@ -790,6 +790,7 @@ class OmniGPUModelRunner(GPUModelRunner):
             if req_state is not None:
                 additional_information_cpu = getattr(req_state, "additional_information_cpu", None)
                 if req_infos is None:
+                    additional_information_cpu.pop("thinker_embeddings", None)
                     req_infos = additional_information_cpu
                 else:
                     req_infos["last_talker_hidden"] = additional_information_cpu.get("last_talker_hidden", None)
