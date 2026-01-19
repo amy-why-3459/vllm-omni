@@ -1047,32 +1047,95 @@ class Qwen3OmniMoeForConditionalGeneration(
                 return trailing_text_hidden
         return None
 
+    def _thinker_decode_to_talker_decode(
+        self,
+        info_dict: dict,
+        device: torch.device,
+        ):
+        """
+        Project thinker outputs to talker inputs during prefill stage.
+        Returns:
+            (input_ids, input_embeds) for talker
+        """
+        thinker_embed = info_dict.get("thinker_embeddings").to(device)
+        thinker_hidden = info_dict.get("thinker_hidden_states").to(device)
+        # Convert list to tensor if needed
+        thinker_sequences = info_dict.get("thinker_sequences")
+        if isinstance(thinker_sequences, list):
+            thinker_result_ids = torch.tensor(thinker_sequences, dtype=torch.long, device=device)
+        elif isinstance(thinker_sequences, torch.Tensor):
+            thinker_result_ids = thinker_sequences.to(device)
+        else:
+            raise ValueError(f"thinker_sequences must be a list or tensor, got {type(thinker_sequences)}")
+        speaker_id = self._get_text_spk_token_id(self.voice_type)
+        tts_bos_embed = info_dict.get("tts_bos_embed").to(device)
+        tts_eos_embed = info_dict.get("tts_eos_embed").to(device)
+        tts_pad_embed = info_dict.get("tts_pad_embed").to(device)
+        logger.info(f"talker_preprocess_decode tts_pad_embed: {tts_pad_embed}, tts_bos_embed: {tts_bos_embed}, tts_eos_embed: {tts_eos_embed}, thinker_result_ids: {thinker_result_ids}, speaker_id: {speaker_id}")
+        
+        logger.info(f"_thinker_decode_to_talker_decode thinker_embed {thinker_embed.shape}, thinker_hidden {thinker_hidden.shape}, thinker_result_ids {thinker_result_ids.shape}")
+        im_start_indexes = torch.nonzero(thinker_result_ids == self.config.im_start_token_id).squeeze()
+        logger.info(f"_thinker_decode_to_talker_decode im_start_indexes: {im_start_indexes}")  
+
+        talker_dev = self._module_device(self.talker)
+
+        def _ensure_1x1(x: torch.Tensor) -> torch.Tensor:
+            if x.ndim == 3:
+                return x[0, -1:, :]
+            if x.ndim == 2:
+                return x[-1]
+            return x.view(1, 1, -1)
+
+        def _proj_from_thinker(x_opt: torch.Tensor | None) -> torch.Tensor:
+            if isinstance(x_opt, torch.Tensor) and x_opt.numel() > 0:
+                xin = _ensure_1x1(x_opt).to(talker_dev)
+            else:
+                xin = torch.zeros(
+                    (1, thinker_embed.shape[-1]),
+                    device=talker_dev,
+                    dtype=thinker_embed.dtype,
+                )
+            return self.talker.text_projection(xin).to(device)
+
+        tts_bos_embed = _proj_from_thinker(tts_bos_embed)
+        tts_eos_embed = _proj_from_thinker(tts_eos_embed)
+        tts_pad_embed = _proj_from_thinker(tts_pad_embed)
+        self.tts_pad_embed = tts_pad_embed
+
+        # For every chatml parts in the full sequence
+        for i in range(len(im_start_indexes)):
+            logger.info(f"_thinker_decode_to_talker_decode Processing {i} of {len(im_start_indexes)}")
+            # Segment boundaries in full sequence coordinates
+            im_start_index = im_start_indexes[i].item()
+            segment_role_token = thinker_result_ids[im_start_index + 1]
+            if (segment_role_token == self.config.assistant_token_id).item():
+                assistant_hidden = self.talker.text_projection(thinker_embed).to(tts_eos_embed.device)
+                logger.info(f"assistant_hidden: {assistant_hidden.shape}")
+                trailing_text_hidden = torch.cat((assistant_hidden, tts_eos_embed), dim=0)
+                logger.info(f"trailing_text_hidden: {trailing_text_hidden.shape}")
+                logger.info(f"_thinker_decode_to_talker_decode trailing_text_hidden: {trailing_text_hidden.shape}, trailing_text_hidden: {trailing_text_hidden}")
+                return trailing_text_hidden
+        return None
+
     def talker_preprocess_decode(self, input_ids: torch.Tensor, input_embeds: torch.Tensor, **info_dict: dict):
         update_dict: dict[str, dict] = {}
         last_talker_hidden = None
         text_step = None
         try:
-            thinker_embed = info_dict.get("thinker_embeddings").to(input_ids.device)
-            thinker_hidden = info_dict.get("thinker_hidden_states").to(input_ids.device)
-            thinker_result_ids = torch.tensor(info_dict.get("thinker_sequences")).to(input_ids.device)
-            speaker_id = self._get_text_spk_token_id(self.voice_type)
-            tts_bos_thinker = info_dict.get("tts_bos_embed").to(input_ids.device)
-            tts_eos_thinker = info_dict.get("tts_eos_embed").to(input_ids.device)
-            tts_pad_thinker = info_dict.get("tts_pad_embed").to(input_ids.device)
-            q_tail =self._thinker_decode_to_talker_decode(thinker_embed, thinker_hidden, input_ids, thinker_result_ids,
-             speaker_id, tts_bos_thinker, tts_eos_thinker, tts_pad_thinker)
-            
+            q_tail =self._thinker_decode_to_talker_decode(info_dict, input_ids.device)
             # q_tail = info_dict.get("trailing_text_hidden")
-            if isinstance(q_tail, torch.Tensor) and q_tail.numel() > 0 and q_tail.shape[0] == 2:
+            if isinstance(q_tail, torch.Tensor) and q_tail.numel() > 0:
                 use_vec = q_tail[0:1, :]
                 new_q_tail = (
                     q_tail[1:, :].detach().to("cpu").contiguous()
                     if q_tail.shape[1] > 1
                     else self.tts_pad_embed.to(input_embeds.device, dtype=input_embeds.dtype)
                 )
+                logger.info(f"talker_preprocess_decode new_q_tail: {new_q_tail.shape}, new_q_tail: {new_q_tail}")
                 text_step = use_vec.to(input_embeds.device, dtype=input_embeds.dtype)
                 update_dict["trailing_text_hidden"] = new_q_tail
             else:
+                logger.info(f"No trailing text hidden found, using tts_pad_embed {self.tts_pad_embed}")
                 text_step = self.tts_pad_embed.to(input_embeds.device, dtype=input_embeds.dtype)
 
             # Get last_talker_hidden from info_dict if available
