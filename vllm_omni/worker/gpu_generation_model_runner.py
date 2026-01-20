@@ -52,7 +52,6 @@ class GPUGenerationModelRunner(OmniGPUModelRunner):
             self.input_batch.add_request(req_state)
             self._init_mrope_positions(req_state)
 
-
     @torch.inference_mode()
     def execute_model(
         self,

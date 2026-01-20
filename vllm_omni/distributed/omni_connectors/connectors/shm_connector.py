@@ -49,7 +49,7 @@ class SharedMemoryConnector(OmniConnectorBase):
 
             metadata = {}
             # if size > self.threshold:
-            if True: # TODO: correct put & get logic
+            if True:  # TODO: correct put & get logic
                 # Use Shared Memory
                 meta = shm_write_bytes(payload, name=put_key)
                 # meta contains {'name': ..., 'size': ...}

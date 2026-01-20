@@ -6,8 +6,8 @@
 import time
 from collections.abc import Callable
 from typing import Any
-import torch
 
+import torch
 from vllm.v1.request import RequestStatus
 
 from vllm_omni.entrypoints.stage_utils import OmniStageTaskType
@@ -202,8 +202,8 @@ def get_chunk(connector, scheduler_output):
 
     # Handle cached/running requests
     cached_reqs = scheduler_output.scheduled_cached_reqs
-    if not hasattr(cached_reqs, "additional_informations"):
-        cached_reqs.additional_informations = {}
+    if not hasattr(cached_reqs, "additional_information"):
+        cached_reqs.additional_information = {}
 
     for i, req_id in enumerate(cached_reqs.req_ids):
         if req_id in connector.finished_requests:
@@ -212,7 +212,7 @@ def get_chunk(connector, scheduler_output):
         connector_get_key = f"{req_id}_{target_stage_id}_{chunk_id}"
         payload_data = get_through_connector(connector, target_stage_id, stage_id, req_id, connector_get_key)
         if payload_data:
-            cached_reqs.additional_informations[req_id] = payload_data
+            cached_reqs.additional_information[req_id] = payload_data
             if payload_data.get("finished"):
                 connector.finished_requests.add(req_id)
 
@@ -331,9 +331,11 @@ def put_chunk(connector, pooling_output, request, custom_process_input_func=None
             else:
                 save_payload = connector.request_payload.get(request_id)
                 payload_data["thinker_embeddings"] = torch.cat(
-                    (save_payload.get("thinker_embeddings"), payload_data.get("thinker_embeddings")), dim=0)
+                    (save_payload.get("thinker_embeddings"), payload_data.get("thinker_embeddings")), dim=0
+                )
                 payload_data["thinker_hidden_states"] = torch.cat(
-                    (save_payload.get("thinker_hidden_states"), payload_data.get("thinker_hidden_states")), dim=0)
+                    (save_payload.get("thinker_hidden_states"), payload_data.get("thinker_hidden_states")), dim=0
+                )
                 logger.info(f"[Stage-{stage_id}] Merged embeddings and hidden states for request {request_id}")
 
         success, size, metadata = connector.put(

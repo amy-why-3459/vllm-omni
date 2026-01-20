@@ -727,13 +727,19 @@ class OmniGPUModelRunner(GPUModelRunner):
                         req_infos = self._get_additional_information(scheduler_output, req_id)
                     else:
                         req_state = self.requests.get(req_id)
-                        req_infos = getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
+                        req_infos = (
+                            getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
+                        )
                     start_offset = int(self.query_start_loc.cpu[req_index])
                     sched_tokens = int(num_scheduled_tokens_np[req_index])
                     s, e = start_offset, start_offset + sched_tokens
                     # only consider to store data into update dict.
                     hidden_states_slice = hidden_states[s:e]
-                    logger.info(f"process_additional_information_updates: hidden_states_slice: {hidden_states_slice}, shape {hidden_states_slice.shape}, \n req_infos: {req_infos}")
+                    logger.info(
+                        f"process_additional_information_updates: "
+                        f"hidden_states_slice: {hidden_states_slice}, "
+                        f"shape {hidden_states_slice.shape}, \n req_infos: {req_infos}"
+                    )
                     update_dict = self.model.postprocess(hidden_states_slice, **req_infos)
                     self._merge_additional_information_update(req_id, update_dict)
         except Exception as e:
@@ -778,8 +784,8 @@ class OmniGPUModelRunner(GPUModelRunner):
                     req_infos = payload_info
                 break
 
-        if req_infos is None and hasattr(scheduler_output.scheduled_cached_reqs, "additional_informations"):
-            cached_infos = getattr(scheduler_output.scheduled_cached_reqs, "additional_informations", {})
+        if req_infos is None and hasattr(scheduler_output.scheduled_cached_reqs, "additional_information"):
+            cached_infos = getattr(scheduler_output.scheduled_cached_reqs, "additional_information", {})
             if isinstance(cached_infos, dict) and req_id in cached_infos:
                 req_infos = cached_infos[req_id]
                 if not isinstance(req_infos, dict):
@@ -794,7 +800,9 @@ class OmniGPUModelRunner(GPUModelRunner):
                     req_infos = additional_information_cpu
                 else:
                     req_infos["last_talker_hidden"] = additional_information_cpu.get("last_talker_hidden", None)
-                    req_infos["num_processed_thinker_tokens"] = additional_information_cpu.get("num_processed_thinker_tokens", 0)
+                    req_infos["num_processed_thinker_tokens"] = additional_information_cpu.get(
+                        "num_processed_thinker_tokens", 0
+                    )
                     if "trailing_text_hidden" in additional_information_cpu:
                         req_infos["trailing_text_hidden"] = additional_information_cpu["trailing_text_hidden"]
                 if not isinstance(req_infos, dict):
@@ -927,8 +935,9 @@ class OmniGPUModelRunner(GPUModelRunner):
                     logger.info(f"req_id: {req_id}, req_infos keys: {req_infos_keys}, req_infos: {req_infos}")
                 else:
                     req_state = self.requests.get(req_id)
-                    req_infos = getattr(req_state, "additional_information_cpu",
-                                        None) if req_state is not None else None
+                    req_infos = (
+                        getattr(req_state, "additional_information_cpu", None) if req_state is not None else None
+                    )
                 start_offset = int(self.query_start_loc.cpu[req_index])
                 sched_tokens = int(num_scheduled_tokens_np[req_index])
                 s, e = start_offset, start_offset + sched_tokens
@@ -965,7 +974,10 @@ class OmniGPUModelRunner(GPUModelRunner):
                             req_input_ids, req_embeds, last_talker_hidden, text_step
                         )
                         update_dict["code_predictor_codes"] = code_predictor_codes
-                        # logger.info(f"talker_mtp: update_dict {update_dict}, code_predictor_codes shape: {code_predictor_codes.shape}")
+                        # logger.info(
+                        #     f"talker_mtp: update_dict {update_dict}, "
+                        #     f"code_predictor_codes shape: {code_predictor_codes.shape}"
+                        # )
                 # TODO(Peiqi): the merge stage could move out from the critical path
                 self._merge_additional_information_update(req_id, update_dict)
 

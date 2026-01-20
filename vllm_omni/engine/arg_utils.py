@@ -37,7 +37,7 @@ class OmniEngineArgs(EngineArgs):
             Used to route outputs to appropriate processors (e.g., "image",
             "audio", "latents"). If None, output type is inferred.
         custom_process_next_stage_input_func: Optional path to a custom function for processing
-            inputs from previous stages 
+            inputs from previous stages
             If None, default processing is used.
         stage_connector_spec: Extra configuration for stage connector
         async_chunk: If set to True, perform async chunk

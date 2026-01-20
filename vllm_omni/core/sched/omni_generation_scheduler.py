@@ -1,6 +1,5 @@
 import time
 from collections import defaultdict
-import importlib
 
 from vllm.distributed.kv_events import KVEventBatch
 from vllm.v1.core.kv_cache_manager import KVCacheBlocks
@@ -12,11 +11,10 @@ from vllm.v1.engine import EngineCoreEventType, EngineCoreOutput, EngineCoreOutp
 from vllm.v1.request import Request, RequestStatus
 from vllm.v1.spec_decode.metrics import SpecDecodingStats
 
-from vllm_omni.core.sched.output import OmniNewRequestData, OmniCachedRequestData
+from vllm_omni.core.sched.output import OmniCachedRequestData, OmniNewRequestData
 from vllm_omni.distributed.omni_connectors.adapter import get_chunk_for_generation
 from vllm_omni.distributed.omni_connectors.factory import OmniConnectorFactory
 from vllm_omni.distributed.omni_connectors.utils.config import ConnectorSpec
-from vllm_omni.model_executor.stage_input_processors.qwen3_omni import talker2code2wav, thinker2talker
 from vllm_omni.outputs import OmniModelRunnerOutput
 
 
@@ -26,8 +24,9 @@ class OmniGenerationScheduler(VLLMScheduler):
         model_config = self.vllm_config.model_config
         self.omni_connector = None
         if model_config.async_chunk:
-            connector_specs = ConnectorSpec(name=model_config.stage_connector_name,
-                                            extra=model_config.stage_connector_extra)
+            connector_specs = ConnectorSpec(
+                name=model_config.stage_connector_name, extra=model_config.stage_connector_extra
+            )
             self.omni_connector = OmniConnectorFactory.create_connector(connector_specs)
         self.stage_id = getattr(self.vllm_config.model_config, "stage_id", None)
 
@@ -157,7 +156,8 @@ class OmniGenerationScheduler(VLLMScheduler):
             req_to_new_blocks=req_to_new_blocks,
         )
 
-        cached_reqs_data = OmniCachedRequestData(req_ids=cached_reqs_data.req_ids,
+        cached_reqs_data = OmniCachedRequestData(
+            req_ids=cached_reqs_data.req_ids,
             resumed_req_ids=cached_reqs_data.resumed_req_ids,
             new_token_ids=cached_reqs_data.new_token_ids,
             all_token_ids=cached_reqs_data.all_token_ids,
@@ -284,8 +284,9 @@ class OmniGenerationScheduler(VLLMScheduler):
                 pooler_output = pooler_outputs[req_index]
 
             # Diffusion request: completes in one step; mark finished and free resources
-            if request.status == RequestStatus.FINISHED_STOPPED or (self.omni_connector is None and
-                request.num_computed_tokens >= request.num_prompt_tokens):
+            if request.status == RequestStatus.FINISHED_STOPPED or (
+                self.omni_connector is None and request.num_computed_tokens >= request.num_prompt_tokens
+            ):
                 request.status = RequestStatus.FINISHED_STOPPED
                 # Optional: set a stop_reason for front-end clarity
                 # (does not affect protocol)
