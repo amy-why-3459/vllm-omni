@@ -237,26 +237,6 @@ class GPUARModelRunner(OmniGPUModelRunner):
                     )
                     logits = None
                 else:
-                    # Apply same fix for broadcast_pp_output path
-                    num_hidden_tokens = hidden_states.shape[0]
-                    if logits_indices.max().item() >= num_hidden_tokens:
-                        logger.warning(
-                            f"logits_indices ({logits_indices}) out of bounds for "
-                            f"hidden_states shape {hidden_states.shape}. "
-                            f"Adjusting to relative indices."
-                        )
-                        if len(logits_indices) == 1 and num_scheduled_tokens_np.shape[0] == 1:
-                            logits_indices_rel = torch.tensor(
-                                [num_hidden_tokens - 1], device=logits_indices.device, dtype=logits_indices.dtype
-                            )
-                        else:
-                            cumsum_tokens = torch.cumsum(
-                                torch.from_numpy(num_scheduled_tokens_np).to(logits_indices.device), dim=0
-                            )
-                            logits_indices_rel = cumsum_tokens - 1
-                            logits_indices_rel = logits_indices_rel.clamp(min=0, max=num_hidden_tokens - 1)
-                        logits_indices = logits_indices_rel
-                        logger.info(f"Adjusted logits_indices to relative: {logits_indices}")
                     sample_hidden_states = hidden_states[logits_indices]
                     logits = self.model.compute_logits(sample_hidden_states)
 

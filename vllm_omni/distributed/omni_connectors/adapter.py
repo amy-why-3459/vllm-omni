@@ -234,30 +234,12 @@ def get_through_connector(connector, target_stage_id, stage_id, req_id, connecto
             payload_data, size = result
             logger.info(f"[Stage-{stage_id}] Received payload {payload_data}")
             if payload_data:
-                # TODO: custom validate the payload_data ?
-                if stage_id == 2:
-                    if not validate_talker_output(payload_data):
-                        logger.warning(
-                            f"[Stage-{stage_id}] Received invalid token IDs for request {req_id}. Waiting..."
-                        )
-                        continue
-                else:
-                    connector.request_prompt_token_ids[req_id] = payload_data.get("thinker_input_ids", [])
+                connector.request_prompt_token_ids[req_id] = payload_data.get("thinker_input_ids", [])
                 connector.get_requests[req_id] += 1
                 logger.info(f"[Stage-{stage_id}] Received one chunk for request {connector_get_key}")
                 break
         time.sleep(1)
     return payload_data
-
-
-def validate_talker_output(payload_data):
-    """Validate that we received proper token IDs"""
-    code_predictor_codes = payload_data.get("code_predictor_codes", [])
-    if code_predictor_codes and len(code_predictor_codes) > 0:
-        token_count = len(code_predictor_codes)
-        if token_count % 16 == 0:
-            return True
-    return False
 
 
 def get_chunk_for_generation(connector, request):
