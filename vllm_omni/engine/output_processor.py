@@ -172,7 +172,7 @@ class OmniRequestState(RequestState):
             for k, v in self.mm_accumulated.items():
                 if isinstance(v, list) and v and isinstance(v[0], torch.Tensor):
                     try:
-                        self.mm_accumulated[k] = torch.cat(v, dim=0)
+                        self.mm_accumulated[k] = torch.cat(v, dim=-1)
                     except Exception:
                         # Keep last tensor on failure
                         self.mm_accumulated[k] = v[-1]
@@ -180,7 +180,7 @@ class OmniRequestState(RequestState):
                     for sk, sv in v.items():
                         if isinstance(sv, list) and sv and isinstance(sv[0], torch.Tensor):
                             try:
-                                v[sk] = torch.cat(sv, dim=0)
+                                v[sk] = torch.cat(sv, dim=-1)
                             except Exception:
                                 v[sk] = sv[-1]
         except Exception:
