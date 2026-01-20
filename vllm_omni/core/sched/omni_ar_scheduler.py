@@ -34,12 +34,15 @@ class OmniARScheduler(VLLMScheduler):
         model_config = self.vllm_config.model_config
         self.omni_connector = None
         if model_config.async_chunk:
-            connector_specs = ConnectorSpec(name=model_config.stage_connector_name,
-                                            extra=model_config.stage_connector_extra)
+            connector_specs = ConnectorSpec(
+                name=model_config.stage_connector_name, extra=model_config.stage_connector_extra
+            )
             self.omni_connector = OmniConnectorFactory.create_connector(connector_specs)
 
             if hasattr(self.vllm_config.model_config, "custom_process_next_stage_input_func"):
-                custom_process_next_stage_input_func = self.vllm_config.model_config.custom_process_next_stage_input_func
+                custom_process_next_stage_input_func = (
+                    self.vllm_config.model_config.custom_process_next_stage_input_func
+                )
                 if custom_process_next_stage_input_func:
                     module_path, func_name = custom_process_next_stage_input_func.rsplit(".", 1)
                     module = importlib.import_module(module_path)
@@ -48,7 +51,6 @@ class OmniARScheduler(VLLMScheduler):
                     self.custom_process_next_stage_input_func = None
             else:
                 self.custom_process_next_stage_input_func = None
-
 
         self.stage_id = getattr(self.vllm_config.model_config, "stage_id", None)
 

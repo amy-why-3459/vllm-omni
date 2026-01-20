@@ -1,9 +1,9 @@
 import base64
+import concurrent.futures
 import os
 from typing import NamedTuple
 
 import requests
-import concurrent.futures
 from openai import OpenAI
 from vllm.assets.audio import AudioAsset
 from vllm.utils.argparse_utils import FlexibleArgumentParser

@@ -3,7 +3,7 @@
 # Copyright 2025 The Qwen team.
 """Stage input processor for Qwen3 Omni MoE: Thinker → Talker transition."""
 
-from typing import Any, Optional, List
+from typing import Any
 
 import torch
 from vllm.inputs import TextPrompt
@@ -53,6 +53,7 @@ def _compute_talker_prompt_ids_length(info, device: torch.device | str = "cuda")
 # Common helpers
 # =========================
 
+
 def _ensure_list(x):
     """Convert ConstantList / tensor-like to Python list."""
     if hasattr(x, "_x"):
@@ -80,6 +81,7 @@ def _validate_stage_inputs(stage_list, engine_input_source):
 # =========================
 # Thinker -> Talker
 # =========================
+
 
 def thinker2talker_async_chunk(
     pooling_output: dict[str, Any],
@@ -139,7 +141,7 @@ def thinker2talker(
         List of OmniTokensPrompt for talker stage
     """
     thinker_outputs = _validate_stage_inputs(stage_list, engine_input_source)
-    talker_inputs: List[OmniTokensPrompt] = []
+    talker_inputs: list[OmniTokensPrompt] = []
 
     device = torch.device(current_platform.device_type)
 
@@ -148,26 +150,16 @@ def thinker2talker(
         output = thinker_output.outputs[0]
 
         info = {
-            "thinker_embeddings": output.multimodal_output["0"]
-            .detach()
-            .to(device=device, dtype=torch.float),
-            "thinker_hidden_states": output.multimodal_output["24"]
-            .detach()
-            .to(device=device, dtype=torch.float),
+            "thinker_embeddings": output.multimodal_output["0"].detach().to(device=device, dtype=torch.float),
+            "thinker_hidden_states": output.multimodal_output["24"].detach().to(device=device, dtype=torch.float),
             "thinker_sequences": (
                 thinker_output.prompt_token_ids + output.token_ids
-            ), # the thinker_sequences is the whole ids
+            ),  # the thinker_sequences is the whole ids
             "thinker_input_ids": thinker_output.prompt_token_ids,
             # Provide thinker-side TTS token embeddings for talker projection
-            "tts_bos_embed": output.multimodal_output["tts_bos_embed"]
-            .detach()
-            .to(device=device, dtype=torch.float),
-            "tts_eos_embed": output.multimodal_output["tts_eos_embed"]
-            .detach()
-            .to(device=device, dtype=torch.float),
-            "tts_pad_embed": output.multimodal_output["tts_pad_embed"]
-            .detach()
-            .to(device=device, dtype=torch.float),
+            "tts_bos_embed": output.multimodal_output["tts_bos_embed"].detach().to(device=device, dtype=torch.float),
+            "tts_eos_embed": output.multimodal_output["tts_eos_embed"].detach().to(device=device, dtype=torch.float),
+            "tts_pad_embed": output.multimodal_output["tts_pad_embed"].detach().to(device=device, dtype=torch.float),
         }
 
         prompt_len = _compute_talker_prompt_ids_length(info, device=device)
@@ -187,6 +179,7 @@ def thinker2talker(
 # =========================
 # Talker -> Code2Wav
 # =========================
+
 
 def talker2code2wav_async_chunk(
     pooling_output: dict[str, Any],
@@ -218,13 +211,7 @@ def talker2code2wav_async_chunk(
         if torch.all(code_tensor == 0):
             return []
 
-    codec_codes = (
-        code_predictor_codes.to(torch.long)
-        .cpu()
-        .to(torch.long)
-        .reshape(-1)
-        .tolist()
-    )
+    codec_codes = code_predictor_codes.to(torch.long).cpu().to(torch.long).reshape(-1).tolist()
     if sum(codec_codes) == 0:
         return []
 
@@ -256,9 +243,9 @@ def talker2code2wav(
 
         Returns:
             List of OmniTokensPrompt for code2wav stage
-        """
+    """
     talker_outputs = _validate_stage_inputs(stage_list, engine_input_source)
-    code2wav_inputs: List[OmniTokensPrompt] = []
+    code2wav_inputs: list[OmniTokensPrompt] = []
     # Process each talker output
     for talker_output in talker_outputs:
         output = talker_output.outputs[0]

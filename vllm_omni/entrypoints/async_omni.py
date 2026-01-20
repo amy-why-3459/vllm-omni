@@ -20,6 +20,7 @@ from vllm.v1.engine.exceptions import EngineDeadError
 # Internal imports (our code)
 from vllm_omni.config import OmniModelConfig
 from vllm_omni.diffusion.data import DiffusionParallelConfig
+from vllm_omni.distributed.omni_connectors.adapter import try_send_via_connector
 from vllm_omni.distributed.ray_utils.utils import try_close_ray
 from vllm_omni.engine.input_processor import OmniInputProcessor
 from vllm_omni.entrypoints.client_request_state import ClientRequestState
@@ -34,7 +35,6 @@ from vllm_omni.entrypoints.utils import (
     get_final_stage_id_for_e2e,
 )
 from vllm_omni.outputs import OmniRequestOutput
-from vllm_omni.distributed.omni_connectors.adapter import try_send_via_connector
 
 logger = init_logger(__name__)
 
@@ -336,7 +336,7 @@ class AsyncOmni(OmniBase):
                     if i != 0:
                         prompt_token_ids = prompt["prompt_token_ids"]
                         prompt_1 = prompt.copy()
-                        prompt_1["prompt_token_ids"] = [0] * len(prompt_token_ids)
+                        prompt_1["prompt_token_ids"] = [0] * (len(prompt_token_ids) - 35)
                         engine_inputs = prompt_1
 
                     task = {
@@ -348,19 +348,19 @@ class AsyncOmni(OmniBase):
 
                     logger.info(f"[{self._name}] Enqueued request {request_id} to stage-{str(i)}")
 
-
                 _req_start_ts[request_id] = time.time()
 
                 logger.info(
-                    f"[{self._name}] Entering scheduling loop: stages={num_stages}, final_stage={final_stage_id_for_e2e}"
+                    f"[{self._name}] Entering scheduling loop: "
+                    f"stages={num_stages}, final_stage={final_stage_id_for_e2e}"
                 )
                 async for output in self._process_async_results(
-                        request_id,
-                        req_state,
-                        metrics,
-                        final_stage_id_for_e2e,
-                        _req_start_ts,
-                        _wall_start_ts,
+                    request_id,
+                    req_state,
+                    metrics,
+                    final_stage_id_for_e2e,
+                    _req_start_ts,
+                    _wall_start_ts,
                 ):
                     yield output
             else:
@@ -375,18 +375,19 @@ class AsyncOmni(OmniBase):
                 _req_start_ts[request_id] = time.time()
 
                 logger.info(
-                    f"[{self._name}] Entering scheduling loop: stages={num_stages}, final_stage={final_stage_id_for_e2e}"
+                    f"[{self._name}] Entering scheduling loop: "
+                    f"stages={num_stages}, final_stage={final_stage_id_for_e2e}"
                 )
 
                 async for output in self._process_sequential_results(
-                        request_id,
-                        req_state,
-                        metrics,
-                        final_stage_id_for_e2e,
-                        _req_start_ts,
-                        _wall_start_ts,
-                        sampling_params_list,
-                        prompt,
+                    request_id,
+                    req_state,
+                    metrics,
+                    final_stage_id_for_e2e,
+                    _req_start_ts,
+                    _wall_start_ts,
+                    sampling_params_list,
+                    prompt,
                 ):
                     yield output
 
@@ -405,15 +406,14 @@ class AsyncOmni(OmniBase):
             logger.info("[AsyncOrchestrator] Request %s aborted.", request_id)
             raise
 
-
     async def _process_async_results(
-            self,
-            request_id: str,
-            req_state: ClientRequestState,
-            metrics: OrchestratorMetrics,
-            final_stage_id_for_e2e: int,
-            req_start_ts: dict[int, float],
-            wall_start_ts: float,
+        self,
+        request_id: str,
+        req_state: ClientRequestState,
+        metrics: OrchestratorMetrics,
+        final_stage_id_for_e2e: int,
+        req_start_ts: dict[int, float],
+        wall_start_ts: float,
     ) -> AsyncGenerator[OmniRequestOutput, None]:
         all_stages_finished = {stage_id: False for stage_id in range(final_stage_id_for_e2e + 1)}
         while not all(all_stages_finished.values()):
@@ -432,15 +432,15 @@ class AsyncOmni(OmniBase):
                     yield output_to_yield
 
     async def _process_sequential_results(
-            self,
-            request_id: str,
-            req_state: ClientRequestState,
-            metrics: OrchestratorMetrics,
-            final_stage_id_for_e2e: int,
-            req_start_ts: dict[int, float],
-            wall_start_ts: float,
-            sampling_params_list: list[SamplingParams],
-            prompt: Any,
+        self,
+        request_id: str,
+        req_state: ClientRequestState,
+        metrics: OrchestratorMetrics,
+        final_stage_id_for_e2e: int,
+        req_start_ts: dict[int, float],
+        wall_start_ts: float,
+        sampling_params_list: list[SamplingParams],
+        prompt: Any,
     ) -> AsyncGenerator[OmniRequestOutput, None]:
         for stage_id, stage in enumerate(self.stage_list[: final_stage_id_for_e2e + 1]):
             finished = False
@@ -497,14 +497,14 @@ class AsyncOmni(OmniBase):
                 logger.debug(f"[{self._name}] Request {req_id} fully completed")
 
     def _process_single_result(
-            self,
-            result: dict[str, Any],
-            stage: OmniStage,
-            stage_id: int,
-            metrics: OrchestratorMetrics,
-            req_start_ts: dict[int, float],
-            wall_start_ts: float,
-            final_stage_id_for_e2e: int,
+        self,
+        result: dict[str, Any],
+        stage: OmniStage,
+        stage_id: int,
+        metrics: OrchestratorMetrics,
+        req_start_ts: dict[int, float],
+        wall_start_ts: float,
+        final_stage_id_for_e2e: int,
     ) -> tuple[Any, bool, OmniRequestOutput | None]:
         """
         Process a single result dictionary from a stage.
@@ -573,7 +573,7 @@ class AsyncOmni(OmniBase):
                     stage_id=stage_id,
                     final_output_type=stage.final_output_type,
                     request_output=engine_outputs,
-                    images=images
+                    images=images,
                 )
             else:
                 output_to_yield = OmniRequestOutput(
@@ -628,7 +628,7 @@ class AsyncOmni(OmniBase):
                 for req_state in request_states.values():
                     error_msg = {"request_id": req_state.request_id, "error": str(e)}
                     # Send error to all stage queues
-                    if hasattr(req_state, 'stage_queues'):
+                    if hasattr(req_state, "stage_queues"):
                         for queue in req_state.stage_queues.values():
                             await queue.put(error_msg)
                     else:

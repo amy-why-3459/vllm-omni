@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from vllm.v1.core.sched.output import NewRequestData, CachedRequestData
+from vllm.v1.core.sched.output import CachedRequestData, NewRequestData
 from vllm.v1.request import Request
 
 from vllm_omni.engine import AdditionalInformationPayload, PromptEmbedsPayload
@@ -53,6 +53,7 @@ class OmniNewRequestData(NewRequestData):
             prefill_token_ids=prefill_token_ids,
             additional_information=request.additional_information,
         )
+
 
 @dataclass
 class OmniCachedRequestData(CachedRequestData):
