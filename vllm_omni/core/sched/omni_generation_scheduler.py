@@ -113,15 +113,12 @@ class OmniGenerationScheduler(VLLMScheduler):
             request = self.waiting.peek_request()
             if self.chunk_manager:
                 if request.status != RequestStatus.WAITING_FOR_CHUNK:
-                    print(f"cwj generation waiting req = {request.request_id} not waiting for chunk")
                     self.chunk_manager.get_chunk(request)
                     request.status = RequestStatus.WAITING_FOR_CHUNK
                     self.waiting.remove(request)
                     self.waiting_for_chunk_waiting_requests.append(request)
                     continue
                 else:
-                    print(f"cwj generation waiting req = {request.request_id} waiting for chunk, "
-                          f"self.finished_load_chunk_reqs = {self.finished_load_chunk_reqs}")
                     if request.request_id in self.finished_load_chunk_reqs:
                         print(f"cwj generation waiting req prompt = {request.prompt_token_ids}")
                         request.status = RequestStatus.WAITING

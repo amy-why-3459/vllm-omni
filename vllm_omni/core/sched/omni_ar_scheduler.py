@@ -80,6 +80,7 @@ class OmniARScheduler(VLLMScheduler):
             for request in running_snapshot:
                 if request.status != RequestStatus.WAITING_FOR_CHUNK:
                     if request.request_id in self.omni_connector.finished_requests:
+                        # todo: clear omni_connector.finished_requests
                         continue
                     self.chunk_manager.get_chunk(request)
                     request.status = RequestStatus.WAITING_FOR_CHUNK
@@ -274,7 +275,6 @@ class OmniARScheduler(VLLMScheduler):
                     )
                 )
                 if self.chunk_manager is not None:
-                    print(f"cwj put chunk request = {request.request_id}")
                     custom_process_next_stage_input_func = self.custom_process_next_stage_input_func
                     self.chunk_manager.put_chunk(pooler_output, request, custom_process_next_stage_input_func)
             else:
