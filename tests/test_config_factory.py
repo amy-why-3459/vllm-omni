@@ -1162,9 +1162,11 @@ class TestDeployConfigLoading:
         assert all("Async" not in (stage.scheduler_cls or "") for stage in stages)
         assert [stage.devices for stage in deploy.stages] == ["0", "0", "0"]
         assert deploy.stages[1].enforce_eager is False
-        assert stages[1].yaml_extras["default_sampling_params"]["max_tokens"] == 2048
+        assert stages[1].yaml_extras["default_sampling_params"]["max_tokens"] == 4096
         assert stages[1].yaml_extras["default_sampling_params"]["min_tokens"] == 0
         assert stages[1].yaml_extras["default_sampling_params"]["stop_token_ids"] == [1]
+        assert stages[1].yaml_engine_args["codec_sampling_params"]["max_tokens"] == 4096
+        assert stages[1].yaml_engine_args["codec_sampling_params"]["temperature"] == 0.8
 
     @pytest.mark.parametrize(
         ("filename", "stage0_devices", "stage1_devices", "stage2_devices", "stage1_replicas"),
@@ -1870,6 +1872,32 @@ class TestQwen3TTSPipeline:
             "temperature": 0.7,
             "top_k": 32,
             "top_p": 1.0,
+        }
+
+    def test_codec_sampling_params_deep_merge_preserves_base_keys(self):
+        base = {
+            "stage_id": 1,
+            "codec_sampling_params": {
+                "temperature": 0.8,
+                "top_k": 100,
+                "top_p": 0.8,
+                "max_tokens": 4096,
+            },
+        }
+        overlay = {
+            "stage_id": 1,
+            "codec_sampling_params": {
+                "max_tokens": 2048,
+            },
+        }
+
+        merged = _deep_merge_stage(base, overlay)
+
+        assert merged["codec_sampling_params"] == {
+            "temperature": 0.8,
+            "top_k": 100,
+            "top_p": 0.8,
+            "max_tokens": 2048,
         }
 
 

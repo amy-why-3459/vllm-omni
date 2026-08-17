@@ -15,6 +15,7 @@ from vllm_omni.model_executor.models.minicpmo_4_5.minicpmo_4_5_omni_tts import (
     MiniCPMO45OmniTTSForConditionalGeneration,
     _max_audio_tokens,
     _restore_weight_norm_weight,
+    resolve_codec_sampling_params,
 )
 from vllm_omni.utils.mm_outputs import to_payload_element
 
@@ -58,6 +59,8 @@ def _make_talker() -> MiniCPMO45OmniTTSForConditionalGeneration:
     talker._request_audio_states = {}
     talker._deferred_cleanup_ids = set()
     talker._codec_min_tokens = 50
+    talker._codec_max_tokens = 4096
+    talker._talker_context_len = 4096
     talker._codec_seed = 42
     return talker
 
@@ -73,15 +76,52 @@ def _routed(output, index: int):
     )
 
 
-@pytest.mark.parametrize(
-    ("condition_tokens", "expected"),
-    [(3, 64), (100, 1000), (1000, 2048)],
-)
-def test_audio_token_limit_scales_with_condition_length(
-    condition_tokens: int,
-    expected: int,
-) -> None:
-    assert _max_audio_tokens(condition_tokens) == expected
+@pytest.mark.parametrize("condition_tokens", [3, 15, 100, 1000])
+def test_audio_token_limit_reserves_prompt_positions(condition_tokens: int) -> None:
+    assert _max_audio_tokens(condition_tokens, max_tokens=4096) == 4096 - condition_tokens
+
+
+def test_audio_token_limit_keeps_floor_for_empty_condition() -> None:
+    assert _max_audio_tokens(0, max_tokens=4096) == 64
+
+
+def test_audio_token_limit_honors_yaml_ceiling_inside_remaining_context() -> None:
+    assert _max_audio_tokens(15, max_tokens=512, context_len=4096) == 512
+
+
+def test_audio_token_limit_clamps_when_prompt_fills_context() -> None:
+    assert _max_audio_tokens(4096, max_tokens=4096) == 0
+    assert _max_audio_tokens(68, max_tokens=4096) == 4028
+
+
+def test_resolve_codec_sampling_params_reads_yaml() -> None:
+    resolved = resolve_codec_sampling_params(
+        {
+            "temperature": 0.8,
+            "top_k": 100,
+            "top_p": 0.8,
+            "repetition_penalty": 1.02,
+            "seed": 42,
+            "min_tokens": 50,
+            "max_tokens": 4096,
+        }
+    )
+    assert resolved == {
+        "temperature": 0.8,
+        "top_k": 100,
+        "top_p": 0.8,
+        "repetition_penalty": 1.02,
+        "seed": 42,
+        "min_tokens": 50,
+        "max_tokens": 4096,
+    }
+
+
+def test_resolve_codec_sampling_params_requires_yaml() -> None:
+    with pytest.raises(ValueError, match="codec_sampling_params"):
+        resolve_codec_sampling_params(None)
+    with pytest.raises(ValueError, match="missing keys"):
+        resolve_codec_sampling_params({"temperature": 0.8})
 
 
 def test_weight_norm_restore_matches_checkpoint_parametrization_in_bfloat16() -> None:
@@ -374,7 +414,8 @@ def test_chunked_prefill_tail_aligns_condition_with_prompt_length(mocker) -> Non
     assert torch.equal(embeds, condition)
     state = talker._request_audio_states["req-chunked-prefill"]
     assert state["min_tokens"] == 50
-    assert state["max_tokens"] == 64
+    # Prompt occupies 68 context positions; remaining decode budget is 4096-68.
+    assert state["max_tokens"] == 4028
 
 
 @pytest.mark.parametrize(

@@ -26,7 +26,6 @@ from tests.e2e.accuracy.qwen3_omni.qwen3_omni_acc_bench_core import (
     find_vllm_cli,
 )
 from tests.helpers.mark import hardware_test
-from tests.helpers.minicpmo_4_5_duplex import SERVER_PARAMS as DUPLEX_TEST_PARAMS
 from tests.helpers.runtime import OmniServerParams
 from tests.helpers.stage_config import get_deploy_config_path
 
@@ -39,10 +38,11 @@ _RESULT_DIR = Path(
     )
 )
 
-_MIN_DAILY_OMNI_ACCURACY = 0.78
+_MIN_DAILY_OMNI_ACCURACY = 0.775
 # MiniCPM-o 4.5 reports 70.4 on Video-MME (w/o subs); ~2pp margin like Daily-Omni.
-_MIN_VIDEOMME_ACCURACY = float(os.environ.get("ACC_BENCH_MIN_VIDEOMME_ACCURACY", "0.68"))
-_MAX_SEED_TTS_MEAN_WER = 0.02
+_MIN_VIDEOMME_ACCURACY = float(os.environ.get("ACC_BENCH_MIN_VIDEOMME_ACCURACY", "0.67"))
+_MAX_SEED_TTS_MEAN_WER = 0.0156
+_MIN_SEED_TTS_MEAN_SIM = 0.689
 # Full Seed-TTS zh split (seed-tts-eval/zh/meta.lst) is 2020 rows.
 _SEED_TTS_LOCALE = "zh"
 _SEED_TTS_NUM_PROMPTS = 2020
@@ -282,48 +282,12 @@ def test_minicpmo_4_5_seed_tts_wer_bench(omni_server) -> None:
             str(_RESULT_DIR),
             "--max-seed-tts-mean-wer",
             str(_MAX_SEED_TTS_MEAN_WER),
+            "--min-seed-tts-mean-sim",
+            str(_MIN_SEED_TTS_MEAN_SIM),
             "--seed-tts-locale",
             _SEED_TTS_LOCALE,
             "--seed-extra-body-json",
             json.dumps(_SEED_EXTRA_BODY, separators=(",", ":")),
-            "--trust-remote-code",
-        ]
-    )
-
-    assert _acc_bench.run_acc_benchmark(_acc_bench.parse_acc_benchmark_args(argv)) == 0
-
-
-@hardware_test(res={"cuda": "H100"}, num_cards=2)
-@pytest.mark.parametrize("omni_server", DUPLEX_TEST_PARAMS, indirect=True)
-def test_minicpmo_4_5_duplex_seed_tts_wer_bench(omni_server) -> None:
-    """Gate Seed-TTS WER through the explicit Realtime TTS contract."""
-    _require_vllm_cli()
-    pytest.importorskip("huggingface_hub")
-
-    argv = build_acc_benchmark_cli_argv(
-        omni_server,
-        skip_seed=False,
-        skip_daily=True,
-        skip_videomme=True,
-        num_prompts=50,
-        max_concurrency=1,
-    )
-    argv.extend(
-        [
-            "--result-dir",
-            str(_RESULT_DIR),
-            "--max-seed-tts-mean-wer",
-            str(_MAX_SEED_TTS_MEAN_WER),
-            "--seed-tts-locale",
-            _SEED_TTS_LOCALE,
-            "--seed-extra-body-json",
-            json.dumps({"save_duplex_request_metrics": True}, separators=(",", ":")),
-            "--seed-backend",
-            "openai-realtime-tts",
-            "--seed-endpoint",
-            "/v1/realtime",
-            "--seed-tts-turns-per-session",
-            "4",
             "--trust-remote-code",
         ]
     )

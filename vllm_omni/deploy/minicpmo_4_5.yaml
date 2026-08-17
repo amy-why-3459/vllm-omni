@@ -60,17 +60,25 @@ stages:
     devices: "0"
     output_connectors:
       to_stage_2: connector_of_shared_memory
-    # Codec sampling comes from the checkpoint's tts_config. These parameters
-    # govern only vLLM's binary continue/stop token.
+    # These parameters govern only vLLM's binary continue/stop token.
     default_sampling_params:
       temperature: 0.0
       top_p: 1.0
       top_k: -1
       min_tokens: 50
-      max_tokens: 2048
+      max_tokens: 4096
       stop_token_ids: [1]
       seed: 42
       detokenize: false
+    # Talker-internal codec sampling. YAML overrides tts_config when set.
+    codec_sampling_params:
+      temperature: 0.8
+      top_k: 100
+      top_p: 0.8
+      repetition_penalty: 1.02
+      seed: 42
+      min_tokens: 50
+      max_tokens: 4096
 
   - stage_id: 2
     max_num_seqs: 4

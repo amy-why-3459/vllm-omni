@@ -382,6 +382,7 @@ def test_sub_config_fields_match_rfc_scopes():
         "enable_sleep_mode",
         "default_sampling_params",
         "subtalker_sampling_params",
+        "codec_sampling_params",
         "has_sampling_extra_args",
         "custom_voice_dir",
         "task_type",

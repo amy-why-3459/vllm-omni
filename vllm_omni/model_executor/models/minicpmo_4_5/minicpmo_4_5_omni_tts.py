@@ -11,7 +11,7 @@ Pipeline:
   4. Continuously generate request-aligned discrete audio-code deltas
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 import torch
@@ -33,31 +33,66 @@ logger = init_logger(__name__)
 
 _REPETITION_WINDOW = 16
 _MIN_AUDIO_TOKENS = 64
-_MAX_AUDIO_TOKENS = 2048
-_AUDIO_TOKENS_PER_TEXT_TOKEN = 10
-# Codec-token sampling happens inside the model; vLLM sampling parameters
-# only choose the Talker's binary continue/stop row.
-_CODEC_SEED = 42
-_CODEC_TEMPERATURE = 0.8
-_CODEC_TOP_K = 25
-_CODEC_TOP_P = 0.85
-_CODEC_REPETITION_PENALTY = 1.05
-_CODEC_MIN_TOKENS = 50
 _DUPLEX_CODEC_TOKENS_PER_CHUNK = 26
+_REQUIRED_CODEC_SAMPLING_KEYS = (
+    "seed",
+    "temperature",
+    "top_k",
+    "top_p",
+    "repetition_penalty",
+    "min_tokens",
+    "max_tokens",
+)
 
 
-def _max_audio_tokens(condition_tokens: int) -> int:
-    """Bound codec generation with a conservative text-length estimate.
+def resolve_codec_sampling_params(yaml_params: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Load Talker codec knobs from deploy YAML ``codec_sampling_params``."""
+    if not isinstance(yaml_params, Mapping) or not yaml_params:
+        raise ValueError(
+            "MiniCPM-o Talker requires stage-1 codec_sampling_params in the deploy YAML; "
+            "sampling defaults are not hardcoded in the model."
+        )
+    missing = [key for key in _REQUIRED_CODEC_SAMPLING_KEYS if yaml_params.get(key) is None]
+    if missing:
+        raise ValueError(f"MiniCPM-o Talker codec_sampling_params missing keys: {missing}")
+    min_tokens = int(yaml_params["min_tokens"])
+    max_tokens = int(yaml_params["max_tokens"])
+    if min_tokens < 0:
+        raise ValueError("codec_sampling_params.min_tokens must be >= 0")
+    if max_tokens <= 0:
+        raise ValueError("codec_sampling_params.max_tokens must be > 0")
+    return {
+        "seed": int(yaml_params["seed"]),
+        "temperature": float(yaml_params["temperature"]),
+        "top_k": int(yaml_params["top_k"]),
+        "top_p": float(yaml_params["top_p"]),
+        "repetition_penalty": float(yaml_params["repetition_penalty"]),
+        "min_tokens": min_tokens,
+        "max_tokens": max_tokens,
+    }
 
-    EOS is masked for the first 50 steps, so a direct ``text_tokens * 10``
-    limit can terminate short responses before EOS is eligible. The 2048
-    ceiling matches the checkpoint's native generation default and keeps the
-    sequence within the Talker's 4096-position context.
+
+def _max_audio_tokens(
+    condition_tokens: int,
+    max_tokens: int,
+    context_len: int | None = None,
+) -> int:
+    """Return the non-duplex codec generation budget.
+
+    YAML ``max_tokens`` is the configured output ceiling. Decode shares the
+    Talker's context window with the prefill prompt, so reserve
+    ``condition_tokens`` positions (the padded ``_omni_prompt_len``) to keep
+    generation inside ``max_model_len`` until codec EOS.
     """
-    return max(
-        _MIN_AUDIO_TOKENS,
-        min(_MAX_AUDIO_TOKENS, condition_tokens * _AUDIO_TOKENS_PER_TEXT_TOKEN),
-    )
+    if condition_tokens <= 0:
+        return _MIN_AUDIO_TOKENS
+    ceiling = int(max_tokens)
+    if ceiling <= 0:
+        raise ValueError("codec_sampling_params.max_tokens must be > 0")
+    context = int(context_len) if context_len is not None else ceiling
+    if context <= 0:
+        raise ValueError("Talker context length must be > 0")
+    return max(0, min(ceiling, context - int(condition_tokens)))
 
 
 def _restore_weight_norm_weight(weight_g: torch.Tensor, weight_v: torch.Tensor) -> torch.Tensor:
@@ -147,12 +182,21 @@ class MiniCPMO45OmniTTSForConditionalGeneration(nn.Module, SupportsPP):
             self._num_audio_tokens = getattr(tts_config, "num_audio_tokens", 6562)
             self._hidden_size = getattr(tts_config, "hidden_size", 768)
             self._normalize = getattr(tts_config, "normalize_projected_hidden", True)
-            self._codec_seed = int(getattr(tts_config, "seed", _CODEC_SEED))
-            self._codec_temperature = float(getattr(tts_config, "temperature", _CODEC_TEMPERATURE))
-            self._codec_top_k = int(getattr(tts_config, "top_k", _CODEC_TOP_K))
-            self._codec_top_p = float(getattr(tts_config, "top_p", _CODEC_TOP_P))
-            self._codec_repetition_penalty = float(getattr(tts_config, "repetition_penalty", _CODEC_REPETITION_PENALTY))
-            self._codec_min_tokens = int(getattr(tts_config, "min_new_tokens", _CODEC_MIN_TOKENS))
+            yaml_codec = getattr(getattr(vllm_config, "model_config", None), "codec_sampling_params", None)
+            resolved = resolve_codec_sampling_params(yaml_codec)
+            self._codec_seed = resolved["seed"]
+            self._codec_temperature = resolved["temperature"]
+            self._codec_top_k = resolved["top_k"]
+            self._codec_top_p = resolved["top_p"]
+            self._codec_repetition_penalty = resolved["repetition_penalty"]
+            self._codec_min_tokens = resolved["min_tokens"]
+            self._codec_max_tokens = resolved["max_tokens"]
+            model_config = getattr(vllm_config, "model_config", None)
+            max_model_len = getattr(model_config, "max_model_len", None)
+            if max_model_len is not None:
+                self._talker_context_len = int(max_model_len)
+            else:
+                self._talker_context_len = int(getattr(tts_config, "max_position_embeddings", self._codec_max_tokens))
         else:
             self._tts_config = None
 
@@ -322,7 +366,11 @@ class MiniCPMO45OmniTTSForConditionalGeneration(nn.Module, SupportsPP):
                 max_tokens = _DUPLEX_CODEC_TOKENS_PER_CHUNK
                 min_tokens = 0 if duplex_boundary else _DUPLEX_CODEC_TOKENS_PER_CHUNK
             else:
-                max_tokens = _max_audio_tokens(int(token_ids.numel()))
+                max_tokens = _max_audio_tokens(
+                    int(full_embeds.shape[0]),
+                    self._codec_max_tokens,
+                    context_len=getattr(self, "_talker_context_len", None),
+                )
                 min_tokens = self._codec_min_tokens
             state = {
                 "step": 0,
@@ -525,7 +573,7 @@ class MiniCPMO45OmniTTSForConditionalGeneration(nn.Module, SupportsPP):
             sampled_id = int(sampled.item())
             is_eos = sampled_id == self._num_audio_tokens - 1
             state["step"] = int(state.get("step", 0)) + 1
-            reached_limit = int(state["step"]) >= int(state.get("max_tokens", 2048))
+            reached_limit = int(state["step"]) >= int(state.get("max_tokens", self._codec_max_tokens))
             finished = is_eos or reached_limit
             state["finished"] = finished
             # MiniCPMTTS.generate_chunk consumes the boundary sample but

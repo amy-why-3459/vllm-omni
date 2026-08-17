@@ -338,6 +338,7 @@ class StageDeployConfig:
     input_connectors: dict[str, str] | None = None
     default_sampling_params: dict[str, Any] | None = None
     subtalker_sampling_params: dict[str, Any] | None = None
+    codec_sampling_params: dict[str, Any] | None = None
 
     # === Generic stage engine fields ===
     # Parallelism, scheduler, and memory-capacity controls.
@@ -555,7 +556,15 @@ def _parse_stage_deploy(stage_data: dict[str, Any]) -> StageDeployConfig:
     return StageDeployConfig(**kwargs)
 
 
-_DEEP_MERGE_KEYS = frozenset({"default_sampling_params", "subtalker_sampling_params", "engine_extras", "engine_args"})
+_DEEP_MERGE_KEYS = frozenset(
+    {
+        "default_sampling_params",
+        "subtalker_sampling_params",
+        "codec_sampling_params",
+        "engine_extras",
+        "engine_args",
+    }
+)
 
 
 def _deep_merge_stage(base: dict, overlay: dict) -> dict:
