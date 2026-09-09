@@ -14,7 +14,7 @@ import time
 import traceback
 import uuid
 import wave
-from collections.abc import Iterable, Mapping, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -468,16 +468,44 @@ def _daily_omni_repo_from_args(args) -> str | None:
     return None
 
 
-def _videomme_repo_from_args(args) -> str | None:
-    """Resolve HuggingFace repo id for Video-MME from CLI args."""
-    dp = getattr(args, "dataset_path", None)
-    hn = getattr(args, "hf_name", None)
-    supported = {p.lower() for p in VideoMMEDataset.SUPPORTED_DATASET_PATHS}
-    supported.add(_DEFAULT_VIDEOMME_REPO.lower())
-    if isinstance(dp, str) and dp.strip().lower() in supported:
-        return dp.strip()
-    if isinstance(hn, str) and hn.strip().lower() in supported:
-        return hn.strip()
+def _looks_like_hf_dataset_id(value: str) -> bool:
+    """True for Hub ids such as ``org/name``; false for local paths."""
+    raw = value.strip()
+    if not raw or raw.startswith((".", "~", "/")) or "\\" in raw:
+        return False
+    parts = raw.split("/")
+    return len(parts) == 2 and all(part.strip() and part.strip() not in (".", "..") for part in parts)
+
+
+def _videomme_repo_from_args(args, *, explicit: bool = False) -> str | None:
+    """Resolve a Hugging Face repo id for Video-MME from CLI args.
+
+    ``--dataset-name hf`` auto-detect only recognizes the official
+    ``lmms-eval/Video-MME`` id so a custom Hub dataset is not silently treated
+    as Video-MME. Explicit ``--dataset-name videomme`` accepts any ``org/name``
+    Hub id (for ``--videomme-repo`` / ``VLLM_VIDEOMME_REPO`` overrides) and
+    raises when ``--dataset-path`` is neither a local directory nor a Hub id.
+    """
+    official = {p.lower() for p in VideoMMEDataset.SUPPORTED_DATASET_PATHS}
+    official.add(_DEFAULT_VIDEOMME_REPO.lower())
+    candidates: list[str] = []
+    for attr in ("dataset_path", "hf_name"):
+        val = getattr(args, attr, None)
+        if isinstance(val, str) and val.strip():
+            candidates.append(val.strip())
+    for raw in candidates:
+        if resolve_videomme_local_root(raw) is not None:
+            continue
+        if raw.lower() in official:
+            return raw
+        if explicit and _looks_like_hf_dataset_id(raw):
+            return raw
+        if explicit:
+            raise ValueError(
+                f"Unsupported Video-MME --dataset-path={raw!r}. Pass an existing local "
+                "directory, a Hugging Face dataset id (org/name), or omit --dataset-path "
+                f"to use {_DEFAULT_VIDEOMME_REPO}."
+            )
     return None
 
 
@@ -700,9 +728,9 @@ def get_samples(args, tokenizer):
         local_root = resolve_videomme_local_root(getattr(args, "dataset_path", None)) or (
             resolve_videomme_local_root(getattr(args, "hf_name", None))
         )
-        # ``is_videomme`` only accepts --dataset-name hf once the path/name resolved to a
-        # known Video-MME repo, so ``repo_id`` is None only under --dataset-name videomme.
-        repo_id = _videomme_repo_from_args(args)
+        # ``--dataset-name hf`` only auto-detects the official Video-MME repo.
+        # Explicit ``--dataset-name videomme`` also honors custom Hub ids.
+        repo_id = _videomme_repo_from_args(args, explicit=args.dataset_name == "videomme")
         if local_root is None and video_dir is None and parquet_path is None:
             # Default Hub mode: download parquet + video zips on demand.
             repo_id = repo_id or _DEFAULT_VIDEOMME_REPO
@@ -3088,33 +3116,33 @@ async def benchmark(
 
         result = {
             "duration": benchmark_duration,
-            "completed": metrics.completed,
-            "failed": metrics.failed,
-            "total_input_tokens": metrics.total_input,
-            "total_output_tokens": metrics.total_output,
-            "request_throughput": metrics.request_throughput,
-            "request_goodput": metrics.request_goodput if goodput_config_dict else None,
-            "output_throughput": metrics.output_throughput,
-            "total_token_throughput": metrics.total_token_throughput,
-            defs.TOTAL_AUDIO_DURATION_S: getattr(metrics, defs.TOTAL_AUDIO_DURATION_S),
-            defs.TOTAL_AUDIO_FRAMES: getattr(metrics, defs.TOTAL_AUDIO_FRAMES),
-            defs.AUDIO_THROUGHPUT: getattr(metrics, defs.AUDIO_THROUGHPUT),
-            defs.TOTAL_IMAGES: getattr(metrics, defs.TOTAL_IMAGES),
-            defs.IMAGE_THROUGHPUT: getattr(metrics, defs.IMAGE_THROUGHPUT),
-            defs.AVERAGE_PIXELS_PER_IMAGE: getattr(metrics, defs.AVERAGE_PIXELS_PER_IMAGE),
-            defs.MEAN_DENOISE_STEP_LATENCY_MS: getattr(metrics, defs.MEAN_DENOISE_STEP_LATENCY_MS),
-            defs.TOTAL_VIDEO_DURATION_S: getattr(metrics, defs.TOTAL_VIDEO_DURATION_S),
-            defs.TOTAL_VIDEO_FRAMES: getattr(metrics, defs.TOTAL_VIDEO_FRAMES),
-            defs.VIDEO_THROUGHPUT: getattr(metrics, defs.VIDEO_THROUGHPUT),
-            defs.MEAN_VIDEO_RTF: getattr(metrics, defs.MEAN_VIDEO_RTF),
-            defs.MEDIAN_VIDEO_RTF: getattr(metrics, defs.MEDIAN_VIDEO_RTF),
-            defs.PERCENTILES_VIDEO_RTF: getattr(metrics, defs.PERCENTILES_VIDEO_RTF),
-            defs.MEAN_VIDEO_GENERATION_MS: getattr(metrics, defs.MEAN_VIDEO_GENERATION_MS),
-            defs.MEDIAN_VIDEO_GENERATION_MS: getattr(metrics, defs.MEDIAN_VIDEO_GENERATION_MS),
-            defs.PERCENTILES_VIDEO_GENERATION_MS: getattr(metrics, defs.PERCENTILES_VIDEO_GENERATION_MS),
-            defs.MEAN_PEAK_MEMORY_MB: getattr(metrics, defs.MEAN_PEAK_MEMORY_MB),
-            defs.MEDIAN_PEAK_MEMORY_MB: getattr(metrics, defs.MEDIAN_PEAK_MEMORY_MB),
-            defs.PERCENTILES_PEAK_MEMORY_MB: getattr(metrics, defs.PERCENTILES_PEAK_MEMORY_MB),
+            "completed": mm_metrics.completed,
+            "failed": mm_metrics.failed,
+            "total_input_tokens": mm_metrics.total_input,
+            "total_output_tokens": mm_metrics.total_output,
+            "request_throughput": mm_metrics.request_throughput,
+            "request_goodput": mm_metrics.request_goodput if goodput_config_dict else None,
+            "output_throughput": mm_metrics.output_throughput,
+            "total_token_throughput": mm_metrics.total_token_throughput,
+            defs.TOTAL_AUDIO_DURATION_S: getattr(mm_metrics, defs.TOTAL_AUDIO_DURATION_S),
+            defs.TOTAL_AUDIO_FRAMES: getattr(mm_metrics, defs.TOTAL_AUDIO_FRAMES),
+            defs.AUDIO_THROUGHPUT: getattr(mm_metrics, defs.AUDIO_THROUGHPUT),
+            defs.TOTAL_IMAGES: getattr(mm_metrics, defs.TOTAL_IMAGES),
+            defs.IMAGE_THROUGHPUT: getattr(mm_metrics, defs.IMAGE_THROUGHPUT),
+            defs.AVERAGE_PIXELS_PER_IMAGE: getattr(mm_metrics, defs.AVERAGE_PIXELS_PER_IMAGE),
+            defs.MEAN_DENOISE_STEP_LATENCY_MS: getattr(mm_metrics, defs.MEAN_DENOISE_STEP_LATENCY_MS),
+            defs.TOTAL_VIDEO_DURATION_S: getattr(mm_metrics, defs.TOTAL_VIDEO_DURATION_S),
+            defs.TOTAL_VIDEO_FRAMES: getattr(mm_metrics, defs.TOTAL_VIDEO_FRAMES),
+            defs.VIDEO_THROUGHPUT: getattr(mm_metrics, defs.VIDEO_THROUGHPUT),
+            defs.MEAN_VIDEO_RTF: getattr(mm_metrics, defs.MEAN_VIDEO_RTF),
+            defs.MEDIAN_VIDEO_RTF: getattr(mm_metrics, defs.MEDIAN_VIDEO_RTF),
+            defs.PERCENTILES_VIDEO_RTF: getattr(mm_metrics, defs.PERCENTILES_VIDEO_RTF),
+            defs.MEAN_VIDEO_GENERATION_MS: getattr(mm_metrics, defs.MEAN_VIDEO_GENERATION_MS),
+            defs.MEDIAN_VIDEO_GENERATION_MS: getattr(mm_metrics, defs.MEDIAN_VIDEO_GENERATION_MS),
+            defs.PERCENTILES_VIDEO_GENERATION_MS: getattr(mm_metrics, defs.PERCENTILES_VIDEO_GENERATION_MS),
+            defs.MEAN_PEAK_MEMORY_MB: getattr(mm_metrics, defs.MEAN_PEAK_MEMORY_MB),
+            defs.MEDIAN_PEAK_MEMORY_MB: getattr(mm_metrics, defs.MEDIAN_PEAK_MEMORY_MB),
+            defs.PERCENTILES_PEAK_MEMORY_MB: getattr(mm_metrics, defs.PERCENTILES_PEAK_MEMORY_MB),
             "input_lens": [output.prompt_len for output in outputs],
             "start_times": [output.start_time for output in outputs],
             "output_lens": actual_output_lens,
