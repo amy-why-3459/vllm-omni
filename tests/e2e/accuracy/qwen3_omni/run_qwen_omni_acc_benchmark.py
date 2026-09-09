@@ -132,6 +132,23 @@ def _validate_videomme(result: dict[str, Any], *, min_accuracy: float | None) ->
     ev = int(result.get("videomme_evaluated_ok", 0) or 0)
     if ev <= 0:
         errs.append("videomme_evaluated_ok is 0; no successful MCQ rows to score.")
+    failed = int(result.get("videomme_request_failed", 0) or 0)
+    if failed > 0:
+        errs.append(
+            f"videomme_request_failed={failed}; the accuracy gate requires every "
+            "gold-labeled request to complete HTTP successfully "
+            "(videomme_accuracy excludes HTTP failures)."
+        )
+    submitted = int(result.get("videomme_submitted", 0) or 0)
+    unique = int(result.get("videomme_unique_question_ids", 0) or 0)
+    if submitted <= 0 or unique != submitted:
+        errs.append(
+            f"Video-MME coverage is incomplete: submitted={submitted}, unique={unique}; "
+            "the accuracy gate requires distinct questions, not oversampled replacements."
+        )
+    no_gold = int(result.get("videomme_no_gold", 0) or 0)
+    if no_gold:
+        errs.append(f"videomme_no_gold={no_gold}; every submitted question must have a gold answer.")
     if min_accuracy is not None and float(acc) + 1e-12 < float(min_accuracy):
         errs.append(f"videomme_accuracy={acc:.6f} < --min-videomme-accuracy={min_accuracy}")
     return errs
