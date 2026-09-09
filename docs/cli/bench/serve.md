@@ -1,6 +1,5 @@
 # vLLM-Omni Benchmark CLI Guide
 
-
 The vllm bench command launches the vLLM-Omni benchmark to evaluate the performance of multimodal models.
 
 ## Notes
@@ -346,8 +345,10 @@ signal, not a transport failure. This local performance test does not score answ
 
 Video-MME (`--dataset-name videomme`) scores multiple-choice video QA. Default packing is
 OmniEvalKit MiniCPM `minicpm-frames` (up to 96 sampled frames as `image_url`). Pass a local
-mirror with `--dataset-path` / `--videomme-parquet` + `--videomme-video-dir`, or use the Hub
-id `lmms-eval/Video-MME`. For `file://` frame URLs, start the server with
+mirror with `--dataset-path` / `--videomme-parquet` + `--videomme-video-dir`, or a Hugging
+Face dataset id (`lmms-eval/Video-MME` by default; any `org/name` is accepted when
+`--dataset-name videomme` is explicit). Relative `--videomme-video-dir` values are resolved
+to absolute `file://` URLs. For those URLs, start the server with
 `--allowed-local-media-path` covering the video root; otherwise use `--videomme-inline-local-video`.
 
 ```bash
@@ -365,7 +366,11 @@ vllm bench serve --omni \
 ```
 
 Accuracy keys (`videomme_accuracy`, per-duration / domain / task breakdowns) are written into
-the saved JSON. Use `--videomme-save-eval-items` for per-request rows.
+the saved JSON. `videomme_accuracy` excludes HTTP failures; `videomme_accuracy_incl_http_fail`
+counts them as wrong. `videomme_submitted` / `videomme_unique_question_ids` show when
+oversampling or missing media made the request count differ from unique-question coverage.
+Use `--videomme-save-eval-items` (or `VIDEOMME_SAVE_EVAL_ITEMS=1`) for per-request
+`videomme_eval_items` rows.
 
 ### Multi-Modal Benchmark
 

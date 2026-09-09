@@ -117,6 +117,16 @@ def _resolve_hf_cache_snapshot(path: Path) -> Path:
     return path
 
 
+def absolute_path(value: str | Path | None) -> Path | None:
+    """Return an absolute path, or ``None`` when ``value`` is empty."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
 def resolve_videomme_local_root(dataset_path: str | None) -> Path | None:
     """Return a local Video-MME root if ``dataset_path`` points at an on-disk mirror.
 
@@ -131,6 +141,30 @@ def resolve_videomme_local_root(dataset_path: str | None) -> Path | None:
     return _resolve_hf_cache_snapshot(path.resolve())
 
 
+def cached_videomme_snapshots() -> list[Path]:
+    """Usable Video-MME snapshots already in the Hub cache, whatever org published them.
+
+    The dataset is mirrored under several ids (``lmms-lab``/``lmms-eval``), so an offline
+    run routinely requests one while a sibling is what actually sits on disk.
+    """
+    from huggingface_hub import constants as hf_constants
+
+    cache = Path(hf_constants.HF_HUB_CACHE)
+    if not cache.is_dir():
+        return []
+
+    found: list[Path] = []
+    for entry in sorted(cache.iterdir()):
+        name = entry.name.lower()
+        if not entry.is_dir() or not name.startswith("datasets--") or not name.endswith("--video-mme"):
+            continue
+        snapshot = _resolve_hf_cache_snapshot(entry)
+        # A repo dir with no parquet is a partial download, not a usable root.
+        if videomme_local_parquet(snapshot) is not None:
+            found.append(snapshot)
+    return found
+
+
 def ensure_videomme_hub_root(repo_id: str) -> Path:
     """Download the Video-MME dataset snapshot from Hugging Face and return its root.
 
@@ -141,12 +175,20 @@ def ensure_videomme_hub_root(repo_id: str) -> Path:
     Raises:
         ImportError: if Hugging Face Hub helpers are not installed.
         ValueError: if ``repo_id`` is empty.
+        FileNotFoundError: if the snapshot is neither cached nor downloadable.
     """
     rid = (repo_id or "").strip()
     if not rid:
         raise ValueError("repo_id is required to download Video-MME from Hugging Face")
 
     try:
+        from huggingface_hub import constants as hf_constants
+        from huggingface_hub.errors import (
+            HfHubHTTPError,
+            HFValidationError,
+            LocalEntryNotFoundError,
+            OfflineModeIsEnabled,
+        )
         from vllm.transformers_utils.repo_utils import hf_api
     except ImportError as e:
         raise ImportError(
@@ -154,20 +196,50 @@ def ensure_videomme_hub_root(repo_id: str) -> Path:
             "--dataset-path / --videomme-video-dir with parquet + extracted videos."
         ) from e
 
-    # Pull QA parquet + video/subtitle archives; skip unrelated repo files.
-    cache = hf_api().snapshot_download(
-        repo_id=rid,
-        repo_type="dataset",
-        allow_patterns=[
-            "videomme/**",
-            "*.parquet",
-            "videos_chunked_*.zip",
-            "subtitle.zip",
-            "subtitle/**",
-            "video/**",
-            "videos/**",
-        ],
-    )
+    offline = bool(hf_constants.HF_HUB_OFFLINE)
+    try:
+        # Pull QA parquet + video/subtitle archives; skip unrelated repo files.
+        cache = hf_api().snapshot_download(
+            repo_id=rid,
+            repo_type="dataset",
+            # Offline runs otherwise resolve repo metadata over the network first and
+            # surface a connection failure instead of the missing cache entry.
+            local_files_only=offline,
+            allow_patterns=[
+                "videomme/**",
+                "*.parquet",
+                "videos_chunked_*.zip",
+                "subtitle.zip",
+                "subtitle/**",
+                "video/**",
+                "videos/**",
+            ],
+        )
+    # ``HfHubHTTPError`` also covers gated / missing repos; Video-MME requires accepting
+    # the dataset terms, so a plain token-less run lands here rather than downloading.
+    except (HFValidationError, HfHubHTTPError, LocalEntryNotFoundError, OfflineModeIsEnabled) as e:
+        if offline:
+            reason = f"HF_HUB_OFFLINE is set and it is not cached under {hf_constants.HF_HUB_CACHE}"
+        else:
+            reason = f"snapshot_download failed with {type(e).__name__}"
+
+        hints = [
+            "Point --dataset-path at a local Video-MME root (a directory holding "
+            "videomme/test-*.parquet plus video/ or videos_chunked_*.zip), or pass "
+            "--videomme-parquet / --videomme-video-dir."
+        ]
+        cached = cached_videomme_snapshots()
+        if cached:
+            hints.append(
+                "Video-MME is already cached under another repo id: " + ", ".join(str(p) for p in cached) + "."
+            )
+        if offline:
+            hints.append("Unset HF_HUB_OFFLINE to download it instead.")
+
+        raise FileNotFoundError(
+            f"Video-MME is unavailable from Hugging Face repo '{rid}': {reason}. " + " ".join(hints)
+        ) from e
+
     root = _resolve_hf_cache_snapshot(Path(cache).resolve())
     logger.info("Video-MME Hub snapshot ready at %s (repo=%s)", root, rid)
     return root
@@ -425,13 +497,13 @@ class VideoMMEDataset(BenchmarkDataset):
                 "token count far past the 1s pairing the recipe assumes. Pass --videomme-duration short."
             )
 
-        self.parquet_path = Path(parquet_path) if parquet_path else None
+        self.parquet_path = absolute_path(parquet_path)
         self.dataset_path = dataset_path
         self.dataset_split = dataset_split
         self.dataset_subset = dataset_subset
         self._hf_streaming = not no_stream
-        self.video_dir = Path(video_dir) if video_dir else None
-        self.subtitle_dir = Path(subtitle_dir) if subtitle_dir else None
+        self.video_dir = absolute_path(video_dir)
+        self.subtitle_dir = absolute_path(subtitle_dir)
         self.pack_mode: VideoMMEPackMode = pack_mode
         self.duration_filter: VideoMMEDurationFilter = duration_filter
         self.use_subtitle = use_subtitle
@@ -613,6 +685,15 @@ class VideoMMEDataset(BenchmarkDataset):
                 "Check --videomme-duration and that --videomme-video-dir holds the videoIDs the rows reference."
             )
         self.maybe_oversample_requests(sampled, num_requests, request_id_prefix, no_oversample)
+        unique_questions = {getattr(req, "videomme_question_id", "") or req.request_id for req in sampled}
+        if len(sampled) > len(unique_questions):
+            logger.warning(
+                "Video-MME submitted %d requests covering %d unique questions "
+                "(missing media is skipped, then the remainder may be reused). "
+                "Submitted request count is not unique-question coverage.",
+                len(sampled),
+                len(unique_questions),
+            )
         return sampled
 
     def _create_sample_request(
@@ -794,12 +875,12 @@ class VideoMMEDataset(BenchmarkDataset):
             frame_path = cache_dir / f"frame_{i:04d}.jpg"
             if not frame_path.is_file():
                 return None
-            parts.append({"type": "image_url", "image_url": {"url": frame_path.as_uri()}})
+            parts.append({"type": "image_url", "image_url": {"url": frame_path.expanduser().resolve().as_uri()}})
             if include_audio:
                 audio_path = cache_dir / f"audio_{i:04d}.wav"
                 if not audio_path.is_file():
                     return None
-                parts.append({"type": "audio_url", "audio_url": {"url": audio_path.as_uri()}})
+                parts.append({"type": "audio_url", "audio_url": {"url": audio_path.expanduser().resolve().as_uri()}})
         return parts or None
 
     def _get_minicpm_frame_parts(
@@ -878,7 +959,7 @@ class VideoMMEDataset(BenchmarkDataset):
         if cache_dir is None:
             b64 = base64.b64encode(payload).decode("ascii")
             return {"type": typ, typ: {"url": f"data:{mime};base64,{b64}"}}
-        path = cache_dir / name
+        path = (cache_dir / name).expanduser().resolve()
         if not path.is_file() or path.stat().st_size == 0:
             path.write_bytes(payload)
         return {"type": typ, typ: {"url": path.as_uri()}}

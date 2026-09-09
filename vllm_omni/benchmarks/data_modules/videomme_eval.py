@@ -89,7 +89,15 @@ def compute_videomme_accuracy_metrics(
 
     Rows without a gold answer are skipped (``no_gold``). Failed HTTP requests are
     excluded from ``videomme_accuracy`` and counted in
-    ``videomme_accuracy_incl_http_fail`` instead.
+    ``videomme_accuracy_incl_http_fail`` instead. The accuracy wrapper gate
+    (``_validate_videomme``) additionally requires ``videomme_request_failed == 0``
+    so a run cannot pass on a subset of successful HTTP responses. Direct
+    ``vllm bench serve`` still reports both metrics without that completeness
+    check.
+
+    ``videomme_submitted`` / ``videomme_unique_question_ids`` show when
+    oversampling or skipped media made the request count differ from unique
+    question coverage.
     """
     if not input_requests or len(input_requests) != len(outputs):
         return None
@@ -152,6 +160,9 @@ def compute_videomme_accuracy_metrics(
         )
 
     evaluated_ok = evaluated - request_failed
+    unique_question_ids = {
+        (req.videomme_question_id or req.request_id) for req in input_requests if isinstance(req, VideoMMESampleRequest)
+    }
     result: dict[str, Any] = {
         "videomme_accuracy": (correct / evaluated_ok) if evaluated_ok else None,
         "videomme_accuracy_incl_http_fail": (correct / evaluated) if evaluated else None,
@@ -161,6 +172,8 @@ def compute_videomme_accuracy_metrics(
         "videomme_no_gold": no_gold,
         "videomme_request_failed": request_failed,
         "videomme_parse_failed": parse_failed,
+        "videomme_submitted": len(input_requests),
+        "videomme_unique_question_ids": len(unique_question_ids),
     }
     for dim, per_bucket in stats.items():
         result[f"videomme_per_{dim}"] = {k: dict(v) for k, v in per_bucket.items()}
@@ -191,6 +204,8 @@ def print_videomme_accuracy_summary(metrics: dict[str, Any]) -> None:
         ("Skipped (no gold):", "videomme_no_gold"),
         ("HTTP failed:", "videomme_request_failed"),
         ("Parsed OK but no A-D found:", "videomme_parse_failed"),
+        ("Submitted requests:", "videomme_submitted"),
+        ("Unique questions:", "videomme_unique_question_ids"),
     ):
         print(f"{label:<40} {metrics.get(key, 0):<10}")
 
