@@ -21,6 +21,8 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
+import tempfile
 import time
 import zipfile
 from collections.abc import Iterator
@@ -117,6 +119,16 @@ def _resolve_hf_cache_snapshot(path: Path) -> Path:
     return path
 
 
+def absolute_path(value: str | Path | None) -> Path | None:
+    """Return an absolute path, or ``None`` when ``value`` is empty."""
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
 def resolve_videomme_local_root(dataset_path: str | None) -> Path | None:
     """Return a local Video-MME root if ``dataset_path`` points at an on-disk mirror.
 
@@ -131,6 +143,30 @@ def resolve_videomme_local_root(dataset_path: str | None) -> Path | None:
     return _resolve_hf_cache_snapshot(path.resolve())
 
 
+def cached_videomme_snapshots() -> list[Path]:
+    """Usable Video-MME snapshots already in the Hub cache, whatever org published them.
+
+    The dataset is mirrored under several ids (``lmms-lab``/``lmms-eval``), so an offline
+    run routinely requests one while a sibling is what actually sits on disk.
+    """
+    from huggingface_hub import constants as hf_constants
+
+    cache = Path(hf_constants.HF_HUB_CACHE)
+    if not cache.is_dir():
+        return []
+
+    found: list[Path] = []
+    for entry in sorted(cache.iterdir()):
+        name = entry.name.lower()
+        if not entry.is_dir() or not name.startswith("datasets--") or not name.endswith("--video-mme"):
+            continue
+        snapshot = _resolve_hf_cache_snapshot(entry)
+        # A repo dir with no parquet is a partial download, not a usable root.
+        if videomme_local_parquet(snapshot) is not None:
+            found.append(snapshot)
+    return found
+
+
 def ensure_videomme_hub_root(repo_id: str) -> Path:
     """Download the Video-MME dataset snapshot from Hugging Face and return its root.
 
@@ -141,33 +177,72 @@ def ensure_videomme_hub_root(repo_id: str) -> Path:
     Raises:
         ImportError: if Hugging Face Hub helpers are not installed.
         ValueError: if ``repo_id`` is empty.
+        FileNotFoundError: if the snapshot is neither cached nor downloadable.
     """
     rid = (repo_id or "").strip()
     if not rid:
         raise ValueError("repo_id is required to download Video-MME from Hugging Face")
 
     try:
-        from vllm.transformers_utils.repo_utils import hf_api
+        from huggingface_hub import constants as hf_constants
+        from huggingface_hub.errors import (
+            HfHubHTTPError,
+            HFValidationError,
+            LocalEntryNotFoundError,
+            OfflineModeIsEnabled,
+        )
+
+        from vllm_omni.transformers_utils.repo_utils import hf_api
     except ImportError as e:
         raise ImportError(
             "Install huggingface_hub to download Video-MME from the Hub, or pass a local "
             "--dataset-path / --videomme-video-dir with parquet + extracted videos."
         ) from e
 
-    # Pull QA parquet + video/subtitle archives; skip unrelated repo files.
-    cache = hf_api().snapshot_download(
-        repo_id=rid,
-        repo_type="dataset",
-        allow_patterns=[
-            "videomme/**",
-            "*.parquet",
-            "videos_chunked_*.zip",
-            "subtitle.zip",
-            "subtitle/**",
-            "video/**",
-            "videos/**",
-        ],
-    )
+    offline = bool(hf_constants.HF_HUB_OFFLINE)
+    try:
+        # Pull QA parquet + video/subtitle archives; skip unrelated repo files.
+        cache = hf_api().snapshot_download(
+            repo_id=rid,
+            repo_type="dataset",
+            # Offline runs otherwise resolve repo metadata over the network first and
+            # surface a connection failure instead of the missing cache entry.
+            local_files_only=offline,
+            allow_patterns=[
+                "videomme/**",
+                "*.parquet",
+                "videos_chunked_*.zip",
+                "subtitle.zip",
+                "subtitle/**",
+                "video/**",
+                "videos/**",
+            ],
+        )
+    # ``HfHubHTTPError`` also covers gated / missing repos; Video-MME requires accepting
+    # the dataset terms, so a plain token-less run lands here rather than downloading.
+    except (HFValidationError, HfHubHTTPError, LocalEntryNotFoundError, OfflineModeIsEnabled) as e:
+        if offline:
+            reason = f"HF_HUB_OFFLINE is set and it is not cached under {hf_constants.HF_HUB_CACHE}"
+        else:
+            reason = f"snapshot_download failed with {type(e).__name__}"
+
+        hints = [
+            "Point --dataset-path at a local Video-MME root (a directory holding "
+            "videomme/test-*.parquet plus video/ or videos_chunked_*.zip), or pass "
+            "--videomme-parquet / --videomme-video-dir."
+        ]
+        cached = cached_videomme_snapshots()
+        if cached:
+            hints.append(
+                "Video-MME is already cached under another repo id: " + ", ".join(str(p) for p in cached) + "."
+            )
+        if offline:
+            hints.append("Unset HF_HUB_OFFLINE to download it instead.")
+
+        raise FileNotFoundError(
+            f"Video-MME is unavailable from Hugging Face repo '{rid}': {reason}. " + " ".join(hints)
+        ) from e
+
     root = _resolve_hf_cache_snapshot(Path(cache).resolve())
     logger.info("Video-MME Hub snapshot ready at %s (repo=%s)", root, rid)
     return root
@@ -223,11 +298,15 @@ def _unzip_member_flat(zf: zipfile.ZipFile, member: str, dest_dir: Path) -> None
     if not name:
         return
     dest = dest_dir / name
-    if dest.is_file() and dest.stat().st_size > 0:
+    if dest.is_file() and dest.stat().st_size == zf.getinfo(member).file_size:
         return
     dest_dir.mkdir(parents=True, exist_ok=True)
-    with zf.open(member) as src, open(dest, "wb") as out:
-        out.write(src.read())
+    # Publish only after ZipFile has read and checked the complete member.
+    with tempfile.TemporaryDirectory(prefix=".videomme-", dir=dest_dir) as temporary:
+        temporary_path = Path(temporary) / name
+        with zf.open(member) as src, temporary_path.open("wb") as out:
+            shutil.copyfileobj(src, out)
+        temporary_path.replace(dest)
 
 
 def ensure_videomme_videos_extracted(root: Path) -> Path:
@@ -378,9 +457,9 @@ class VideoMMESampleRequest(SampleRequest):
     videomme_domain: str = ""
     videomme_sub_category: str = ""
     videomme_task_type: str = ""
+    videomme_skipped_rows: int = 0
     omni_extra_body: dict[str, Any] | None = None
     omni_chat_messages: list[dict[str, Any]] | None = None
-    omni_chat_mm_position: Literal["first", "last"] = "first"
 
 
 class VideoMMEDataset(BenchmarkDataset):
@@ -425,13 +504,13 @@ class VideoMMEDataset(BenchmarkDataset):
                 "token count far past the 1s pairing the recipe assumes. Pass --videomme-duration short."
             )
 
-        self.parquet_path = Path(parquet_path) if parquet_path else None
+        self.parquet_path = absolute_path(parquet_path)
         self.dataset_path = dataset_path
         self.dataset_split = dataset_split
         self.dataset_subset = dataset_subset
         self._hf_streaming = not no_stream
-        self.video_dir = Path(video_dir) if video_dir else None
-        self.subtitle_dir = Path(subtitle_dir) if subtitle_dir else None
+        self.video_dir = absolute_path(video_dir)
+        self.subtitle_dir = absolute_path(subtitle_dir)
         self.pack_mode: VideoMMEPackMode = pack_mode
         self.duration_filter: VideoMMEDurationFilter = duration_filter
         self.use_subtitle = use_subtitle
@@ -442,12 +521,14 @@ class VideoMMEDataset(BenchmarkDataset):
             if max_frames is not None
             else (VIDEOMME_SHORT_MAX_FRAMES if pack_mode == "minicpm-interleave" else VIDEOMME_DEFAULT_MAX_FRAMES)
         )
+        if self.max_frames <= 0:
+            raise ValueError("Video-MME max_frames must be positive")
         #: In-process memo of content parts; the on-disk frame cache survives across runs.
         self._frame_cache: dict[str, list[dict[str, Any]]] = {}
         self._video_index: dict[str, Path] | None = None
 
         super().__init__(
-            dataset_path=dataset_path if self.parquet_path is None else None,
+            dataset_path=dataset_path,
             random_seed=random_seed,
             **kwargs,
         )
@@ -466,25 +547,30 @@ class VideoMMEDataset(BenchmarkDataset):
     # ------------------------------------------------------------------ loading
 
     def load_data(self) -> None:
+        """Resolve local/Hub assets once, shared by the CLI and direct callers."""
+        local_root = resolve_videomme_local_root(self.dataset_path)
+        if local_root is None and self.parquet_path is None and self.video_dir is None:
+            local_root = resolve_videomme_root(self.dataset_path)
+
+        if local_root is not None:
+            if self.parquet_path is None:
+                self.parquet_path = videomme_local_parquet(local_root)
+                if self.parquet_path is None:
+                    raise FileNotFoundError(f"No Video-MME parquet under {local_root}; pass --videomme-parquet.")
+            if self.video_dir is None:
+                self.video_dir = ensure_videomme_videos_extracted(local_root)
+            if self.use_subtitle and self.subtitle_dir is None:
+                self.subtitle_dir = ensure_videomme_subtitles_extracted(local_root)
+
+        if self.video_dir is None or not self.video_dir.is_dir():
+            raise ValueError(
+                "Video-MME requires --videomme-video-dir pointing at extracted videos, "
+                "or a local/Hub dataset root containing video/ or videos_chunked_*.zip."
+            )
         if self.parquet_path is not None:
             self._load_from_parquet(self.parquet_path)
-            return
-
-        local_root = resolve_videomme_local_root(self.dataset_path)
-        if local_root is not None:
-            local_pq = videomme_local_parquet(local_root)
-            if local_pq is not None:
-                if self.video_dir is None:
-                    try:
-                        self.video_dir = ensure_videomme_videos_extracted(local_root)
-                    except FileNotFoundError:
-                        self.video_dir = videomme_local_video_dir(local_root)
-                if self.subtitle_dir is None:
-                    self.subtitle_dir = ensure_videomme_subtitles_extracted(local_root)
-                self._load_from_parquet(local_pq)
-                return
-
-        self._load_from_huggingface()
+        else:
+            self._load_from_huggingface()
 
     def _load_from_parquet(self, path: Path) -> None:
         try:
@@ -494,7 +580,7 @@ class VideoMMEDataset(BenchmarkDataset):
         if not path.is_file():
             raise FileNotFoundError(f"Video-MME parquet not found: {path}")
         df = pd.read_parquet(path)
-        self._set_rows([row.to_dict() for _, row in df.iterrows()])
+        self._set_rows(df.to_dict(orient="records"))
 
     def _load_from_huggingface(self) -> None:
         if load_dataset is None:
@@ -510,7 +596,7 @@ class VideoMMEDataset(BenchmarkDataset):
         if self.dataset_subset is not None:
             load_kw["name"] = self.dataset_subset
         ds = load_dataset(self.dataset_path, **load_kw)
-        self._set_rows([self._coerce_row(item) for item in ds])
+        self._set_rows(list(ds))
 
     def _set_rows(self, rows: list[dict[str, Any]]) -> None:
         """Apply the duration filter and shuffle, then expose rows as ``self.data``."""
@@ -523,17 +609,6 @@ class VideoMMEDataset(BenchmarkDataset):
             rows = rows[:]
             random.Random(self.random_seed).shuffle(rows)
         self.data = _ListDatasetIterator(rows)
-
-    @staticmethod
-    def _coerce_row(item: Any) -> dict[str, Any]:
-        if isinstance(item, dict):
-            return item
-        if hasattr(item, "as_py"):
-            return dict(item.as_py())
-        try:
-            return dict(item)
-        except (TypeError, ValueError):
-            return {k: item[k] for k in item}  # type: ignore[misc]
 
     @staticmethod
     def _normalize_fields(row: dict[str, Any]) -> dict[str, Any]:
@@ -579,19 +654,17 @@ class VideoMMEDataset(BenchmarkDataset):
         # minutes before the first request goes out; report progress to keep that legible.
         started = time.monotonic()
         last_report = started
-        try:
-            total = min(num_requests, len(self.data))
-        except TypeError:  # HF streaming datasets are not sized
-            total = num_requests
+        total = min(num_requests, len(self.data))
+        skipped_rows = 0
         seen = 0
         for seen, item in enumerate(self.data, start=1):  # noqa: B007
             if len(sampled) >= num_requests:
                 break
-            req = self._create_sample_request(
-                self._coerce_row(item), cached_tokenizer, output_len, request_id_prefix, len(sampled)
-            )
-            if req:
+            req = self._create_sample_request(item, cached_tokenizer, output_len, request_id_prefix, len(sampled))
+            if req is not None:
                 sampled.append(req)
+            else:
+                skipped_rows += 1
             now = time.monotonic()
             if now - last_report >= _SAMPLE_PROGRESS_INTERVAL_S:
                 logger.info(
@@ -612,7 +685,19 @@ class VideoMMEDataset(BenchmarkDataset):
                 f"(duration_filter={self.duration_filter!r}, video_dir={self.video_dir}). "
                 "Check --videomme-duration and that --videomme-video-dir holds the videoIDs the rows reference."
             )
+        for request in sampled:
+            assert isinstance(request, VideoMMESampleRequest)
+            request.videomme_skipped_rows = skipped_rows
         self.maybe_oversample_requests(sampled, num_requests, request_id_prefix, no_oversample)
+        unique_questions = {getattr(req, "videomme_question_id", "") or req.request_id for req in sampled}
+        if len(sampled) > len(unique_questions):
+            logger.warning(
+                "Video-MME submitted %d requests covering %d unique questions "
+                "(missing media is skipped, then the remainder may be reused). "
+                "Submitted request count is not unique-question coverage.",
+                len(sampled),
+                len(unique_questions),
+            )
         return sampled
 
     def _create_sample_request(
@@ -648,7 +733,6 @@ class VideoMMEDataset(BenchmarkDataset):
             videomme_task_type=fields["task_type"],
             omni_extra_body=omni_extra,
             omni_chat_messages=self._build_openai_messages(mm_payload, user_text),
-            omni_chat_mm_position="first",
         )
 
     # ------------------------------------------------------------------ prompt
@@ -792,14 +876,14 @@ class VideoMMEDataset(BenchmarkDataset):
         parts: list[dict[str, Any]] = []
         for i in range(count):
             frame_path = cache_dir / f"frame_{i:04d}.jpg"
-            if not frame_path.is_file():
+            if not frame_path.is_file() or frame_path.stat().st_size == 0:
                 return None
-            parts.append({"type": "image_url", "image_url": {"url": frame_path.as_uri()}})
+            parts.append({"type": "image_url", "image_url": {"url": frame_path.expanduser().resolve().as_uri()}})
             if include_audio:
                 audio_path = cache_dir / f"audio_{i:04d}.wav"
-                if not audio_path.is_file():
+                if not audio_path.is_file() or audio_path.stat().st_size == 0:
                     return None
-                parts.append({"type": "audio_url", "audio_url": {"url": audio_path.as_uri()}})
+                parts.append({"type": "audio_url", "audio_url": {"url": audio_path.expanduser().resolve().as_uri()}})
         return parts or None
 
     def _get_minicpm_frame_parts(
@@ -849,6 +933,8 @@ class VideoMMEDataset(BenchmarkDataset):
 
         if cache_dir is not None:
             cache_dir.mkdir(parents=True, exist_ok=True)
+            # A failed rebuild must not leave a manifest advertising a complete cache.
+            (cache_dir / "manifest.json").unlink(missing_ok=True)
 
         parts: list[dict[str, Any]] = []
         for i, frame in enumerate(frames):
@@ -878,17 +964,17 @@ class VideoMMEDataset(BenchmarkDataset):
         if cache_dir is None:
             b64 = base64.b64encode(payload).decode("ascii")
             return {"type": typ, typ: {"url": f"data:{mime};base64,{b64}"}}
-        path = cache_dir / name
-        if not path.is_file() or path.stat().st_size == 0:
-            path.write_bytes(payload)
+        path = (cache_dir / name).expanduser().resolve()
+        # Reaching this path means the cache missed validation. Replace residual
+        # files as well: a nonempty file may be from an interrupted write.
+        path.write_bytes(payload)
         return {"type": typ, typ: {"url": path.as_uri()}}
 
     @staticmethod
     def _sample_timestamps(duration: float, max_num_frames: int) -> list[float]:
         """Port of OmniEvalKit ``_sample_video_frame_indices`` timestamps."""
         if duration > max_num_frames:
-            grid = [round(i * 0.1, 1) for i in range(int(duration / 0.1))]
-            return [grid[i] for i in _uniform_sample_indices(len(grid), max_num_frames)]
+            return [round(i * 0.1, 1) for i in _uniform_sample_indices(int(duration / 0.1), max_num_frames)]
         # OmniEvalKit uses int(duration); clamp to >=1 so sub-second clips still yield a frame.
         return [float(i) for i in range(max(1, int(duration)))]
 

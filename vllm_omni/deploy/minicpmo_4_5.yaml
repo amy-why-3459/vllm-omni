@@ -48,8 +48,7 @@ stages:
         num_frames: 128
     limit_mm_per_prompt:
       # Daily-Omni: up to 64 interleaved image/audio pairs (1fps).
-      # Video-MME minicpm-frames: OmniEvalKit samples up to 96 frames as image_url.
-      image: 96
+      image: 64
       audio: 64
       video: 1
     default_sampling_params:

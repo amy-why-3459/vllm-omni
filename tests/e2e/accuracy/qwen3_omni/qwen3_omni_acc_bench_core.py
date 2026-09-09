@@ -126,31 +126,16 @@ def videomme_bench_argv() -> list[str]:
     * Otherwise pass the Hub id (``VLLM_VIDEOMME_REPO`` / ``lmms-eval/Video-MME``); the child
       bench downloads via ``huggingface_hub.snapshot_download``.
     """
-    root = os.environ.get("VLLM_VIDEOMME_DATASET_PATH", "").strip() or os.environ.get("VIDEOMME_ROOT", "").strip()
-    if root:
-        p = Path(root).expanduser()
-        # Preserve Hub ids verbatim. Only canonicalize when the value is a real directory.
-        if p.exists() and p.is_dir():
-            return [
-                "--dataset-name",
-                "videomme",
-                "--dataset-path",
-                str(p.resolve()),
-            ]
-        # Non-directory values (e.g. accidental Hub id in DATASET_PATH) fall through as path.
-        return [
-            "--dataset-name",
-            "videomme",
-            "--dataset-path",
-            root,
-        ]
-    repo = os.environ.get("VLLM_VIDEOMME_REPO", DEFAULT_VIDEOMME_HF_REPO).strip() or DEFAULT_VIDEOMME_HF_REPO
-    return [
-        "--dataset-name",
-        "videomme",
-        "--dataset-path",
-        repo,
-    ]
+    source = (
+        os.environ.get("VLLM_VIDEOMME_DATASET_PATH", "").strip()
+        or os.environ.get("VIDEOMME_ROOT", "").strip()
+        or os.environ.get("VLLM_VIDEOMME_REPO", "").strip()
+        or DEFAULT_VIDEOMME_HF_REPO
+    )
+    path = Path(source).expanduser()
+    if path.is_dir():
+        source = str(path.resolve())
+    return ["--dataset-name", "videomme", "--dataset-path", source]
 
 
 def seed_tts_bench_argv(*, locale: str = "en") -> list[str]:
