@@ -617,9 +617,11 @@
     // no client-side resize (the server normalizes at scale_resolution=448).
     cameraTimer = window.setInterval(() => {
       if (!cameraStream || cameraPreview.videoWidth === 0) return;
-      cameraCanvas.width = cameraPreview.videoWidth;
-      cameraCanvas.height = cameraPreview.videoHeight;
-      cameraCanvas.getContext('2d').drawImage(cameraPreview, 0, 0);
+      const scale = profile.cameraMaxDimension
+        ? Math.min(1, profile.cameraMaxDimension / Math.max(cameraPreview.videoWidth, cameraPreview.videoHeight)) : 1;
+      cameraCanvas.width = Math.max(1, Math.round(cameraPreview.videoWidth * scale));
+      cameraCanvas.height = Math.max(1, Math.round(cameraPreview.videoHeight * scale));
+      cameraCanvas.getContext('2d').drawImage(cameraPreview, 0, 0, cameraCanvas.width, cameraCanvas.height);
       cameraPendingFrame = cameraCanvas.toDataURL('image/jpeg', 0.7).split(',')[1];
     }, 1000);
     cameraButton.textContent = 'Camera off';

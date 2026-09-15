@@ -8,11 +8,11 @@ This implements [RFC #7222](https://github.com/vllm-project/vllm-omni/issues/722
 | --- | --- | --- | --- |
 | `minicpm-native` | Model-controlled listen/speak, continuous audio input | Frames accompany audio | Yes |
 | `qwen3-turn --stt` (default) | User presses **Send turn** | No | No |
-| `qwen3-turn --vad` | Server detects trailing silence | No | No |
+| `qwen3-turn --vad` | Server detects trailing silence | Sampled frames with each spoken turn | No |
 
 Qwen3 is **turn-based, not full-duplex**: microphone upload pauses while an
 answer is generated and played, followed by a 300 ms echo guard. There is no
-barge-in. The camera control is hidden because Qwen's visual API is separate.
+barge-in. Camera input is available in Qwen VAD mode; STT remains audio-only.
 Gradio remains available for upload/chat use cases.
 
 ## MiniCPM: existing command stays valid
@@ -115,7 +115,7 @@ startup log and `/health` before connecting.
 
 VAD connects with `duplex=1` and sends nested `session.audio.input` configuration
 with `create_response: true` and **`interrupt_response: false`**. It sends no
-manual commits, native flags, reference voice, camera frames or playback ACKs.
+manual commits, native flags, reference voice or playback ACKs.
 It explicitly selects `playback_commit_policy: commit_all_on_done` so completed
 assistant replies enter session history without playback ACKs. User audio and
 assistant text are retained for subsequent VAD turns on the same connection.
@@ -124,6 +124,24 @@ assistant text are retained for subsequent VAD turns on the same connection.
 pause microphone upload and display a notice; repeat discarded speech after the
 answer. Failed handshakes time out after 15 seconds with a deployment hint;
 Silero initialization failures display a specific error.
+
+## Qwen VAD camera input
+
+After starting a session with `--vad`, click **Camera**, allow access, and ask
+about what the camera sees. The UI uploads one JPEG per second alongside audio,
+resized to at most 448 pixels on the longest side. The backend attaches sampled
+frames as ordered `image_url` parts alongside the utterance's audio when VAD
+ends the turn. This requires the updated backend as well as the updated UI;
+restart the backend after installing this change.
+
+During silence only the latest frame is retained. During speech the most recent
+8 frames are kept, with a 4 MiB encoded-image budget per buffered window. Frames
+are cleared after commit, cancellation, or input reset. Committed frames remain
+in conversation history, so long visual sessions consume additional context.
+Camera-off stops new uploads; already uploaded frames can still accompany the
+current turn. Speech triggers the response; video alone does not trigger one.
+This is sampled visual context, without precise audio/video timestamp alignment.
+Microphone and frame upload pause while a response is generated and played.
 
 ## Shared host options
 

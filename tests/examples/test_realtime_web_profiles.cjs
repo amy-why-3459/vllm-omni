@@ -43,7 +43,7 @@ test('STT uses the shipped commit sequence and audio payload, including each new
   assert.equal(stt.mapEvent({ type: 'transcription.delta', delta: 'hello' }).role, 'assistant');
 });
 
-test('Qwen strips native URL flags and never sends camera or playback ACK', () => {
+test('Qwen enables sampled camera frames only for VAD and never sends playback ACK', () => {
   for (const adapter of ['stt', 'vad']) {
     const p = profiles['qwen3-turn']({ ...config, adapter });
     const url = new URL(p.url({ ...config, realtimePath: 'wss://backend/v1/realtime?native_duplex=1&minicpmo45_native_duplex=1' }, 'http://localhost/'));
@@ -51,9 +51,9 @@ test('Qwen strips native URL flags and never sends camera or playback ACK', () =
     assert.equal(url.searchParams.get('duplex'), adapter === 'vad' ? '1' : '0');
     assert.equal(url.searchParams.has('native_duplex'), false);
     assert.equal(url.searchParams.has('minicpmo45_native_duplex'), false);
-    assert.equal(p.append('PCM', 'JPEG').video_frames, undefined);
+    assert.deepEqual(plain(p.append('PCM', 'JPEG').video_frames || []), adapter === 'vad' ? ['JPEG'] : []);
     assert.equal(p.ack('r', 100), null);
-    assert.equal(p.camera, false);
+    assert.equal(p.camera, adapter === 'vad');
     assert.equal(p.mapEvent({ type: 'response.listen' }).kind, 'ignore');
   }
 });

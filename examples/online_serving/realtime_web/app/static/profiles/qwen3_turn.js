@@ -8,9 +8,9 @@
       title: 'Qwen3-Omni Voice', eyebrow: 'Turn-based realtime call',
       policy: vad ? 'Server VAD • one response at a time' : 'Send turn • one response at a time',
       description: vad
-        ? 'Pause to send your turn. Microphone upload pauses while the model answers. Requires session_mode: duplex and a Silero artifact. No barge-in or camera input.'
+        ? 'Pause to send your turn. Microphone upload pauses while the model answers. Requires session_mode: duplex and a Silero artifact. Optional camera frames accompany each spoken turn. No barge-in.'
         : 'Speak, then press Send turn. Microphone upload pauses while the model answers. Each turn uses a fresh connection; conversation history is not carried between turns. No barge-in or camera input.',
-      waiting: 'Waiting for you', camera: false, playbackAck: false, clientCommit: !vad,
+      waiting: 'Waiting for you', camera: vad, cameraMaxDimension: 448, playbackAck: false, clientCommit: !vad,
       halfDuplex: true, closeSession: vad, reconnectEachTurn: !vad,
       readyEvent: vad ? 'session.updated' : 'session.created', instructions: vad, sendIntervalMs: 200,
       presets: { assistant: 'You are a helpful assistant. Answer clearly and concisely.' },
@@ -43,7 +43,11 @@
           { type: 'session.update', session: { playback_commit_policy: 'commit_all_on_done' } },
         ];
       },
-      append: (audio) => ({ type: 'input_audio_buffer.append', audio, format: 'pcm16', sample_rate_hz: 16000 }),
+      append(audio, frame) {
+        const event = { type: 'input_audio_buffer.append', audio, format: 'pcm16', sample_rate_hz: 16000 };
+        if (vad && frame) event.video_frames = [frame];
+        return event;
+      },
       commitMessages: () => vad ? [] : [{ type: 'input_audio_buffer.commit', final: true }],
       ack: () => null,
       mapEvent(event) {

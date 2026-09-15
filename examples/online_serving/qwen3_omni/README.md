@@ -614,7 +614,9 @@ Speak and pause for 500 ms to submit automatically. `--vad` configures the clien
 it does not load a VAD model or change the backend deployment by itself.
 
 Both modes pause microphone upload while the reply is generated and played.
-Camera input and voice interruption are unavailable. To switch back to manual
+In VAD mode, click **Camera** to upload sampled frames with your spoken question;
+see [camera setup and limits](../realtime_web/README.md#qwen-vad-camera-input).
+STT remains audio-only, and voice interruption is unavailable. To switch back to manual
 turns, restart the UI with `--stt`, refresh the page, and reconnect; the VAD-enabled
 backend can remain running. Stop the existing UI before reusing port 7863.
 See the [shared UI guide](../realtime_web/README.md) for HTTPS access and testing.
