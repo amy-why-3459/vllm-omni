@@ -48,6 +48,7 @@
   document.getElementById('promptControls').hidden = !profile.instructions;
 
   let socket = null;
+  let closingSocket = null;
   let mediaStream = null;
   let captureContext = null;
   let captureNode = null;
@@ -326,7 +327,7 @@
       offset += chunk.length;
     }
     pendingCapture = [];
-    const pcm = resampleInt16(merged, captureRate, INPUT_RATE);
+    const pcm = resampleInt16(merged, captureRate, profile.inputSampleRate || INPUT_RATE);
     const appendEvent = profile.append(int16ToBase64(pcm), cameraPendingFrame);
     cameraPendingFrame = null;
     socket.send(JSON.stringify(appendEvent));
@@ -379,8 +380,34 @@
     setPlayback('Idle');
     playbackComplete = true;
     if (message.underrunMs > 0) appendLog(`playback underrun ${message.underrunMs} ms`);
-    if (!profile.halfDuplex) responseComplete = true;
+    if (!profile.halfDuplex && !profile.waitForResponseDone) responseComplete = true;
     finishResponseIfReady();
+  }
+
+  async function handleAudioEvent(action) {
+    markBusy();
+    currentResponseId = action.responseId || currentResponseId || `turn-${turnCounter}`;
+    setModel('Speaking');
+    const generation = sessionGeneration;
+    const decoded = await decodeAudioDelta(action.event);
+    if (generation === sessionGeneration) feedPlayback(decoded, currentResponseId);
+  }
+
+  function handleTranscriptEvent(action) {
+    if (action.role === 'assistant') {
+      // Qwen may emit both text and audio-transcript representations.
+      // Display one channel per response instead of duplicating the answer.
+      if (profile.deduplicateTranscript && assistantTextChannel && action.channel !== assistantTextChannel) return;
+      if (action.text) assistantTextChannel = action.channel || assistantTextChannel;
+    }
+    if (action.kind === 'text') addTranscript(action.role, action.text);
+    else if (profile.deduplicateTranscript && action.role === 'assistant') {
+      if (action.text) {
+        const turn = ensureTurn('assistant');
+        turn.value = action.text;
+        turn.text.textContent = action.text;
+      }
+    } else finishTranscript(action.role, action.text);
   }
 
   async function handleEvent(event) {
@@ -392,6 +419,22 @@
         setConnection('Connected', 'online');
         if (!assistantActive) setModel(profile.waiting);
         break;
+      case 'interrupt':
+        sessionGeneration += 1;
+        // A cancelled response never reaches 'done', so nothing else would
+        // disarm the turn watchdog it left armed.
+        clearTimeout(turnTimeout);
+        if (playbackNode) playbackNode.port.postMessage({ type: 'clear' });
+        responseComplete = true;
+        playbackComplete = true;
+        responseHasAudio = false;
+        assistantActive = false;
+        currentResponseId = null;
+        assistantTextChannel = null;
+        finishTranscript('assistant');
+        setPlayback('Idle');
+        setModel(profile.waiting);
+        break;
       case 'listen':
         assistantActive = false;
         setModel(profile.waiting);
@@ -401,33 +444,14 @@
         if (echoTimer !== null) { clearTimeout(echoTimer); echoTimer = null; }
         beginAssistant(responseId);
         break;
-      case 'audio': {
-        markBusy();
-        currentResponseId = responseId || currentResponseId || `turn-${turnCounter}`;
-        setModel('Speaking');
-        const generation = sessionGeneration;
-        const decoded = await decodeAudioDelta(action.event);
-        if (generation === sessionGeneration) feedPlayback(decoded, currentResponseId);
+      case 'audio':
+        await handleAudioEvent(action);
         break;
-      }
       case 'drain':
         requestPlaybackDrain(responseId);
         break;
       case 'text': case 'text-final':
-        if (action.role === 'assistant') {
-          // Qwen may emit both text and audio-transcript representations.
-          // Display one channel per response instead of duplicating the answer.
-          if (profile.halfDuplex && assistantTextChannel && action.channel !== assistantTextChannel) break;
-          if (action.text) assistantTextChannel = action.channel || assistantTextChannel;
-        }
-        if (action.kind === 'text') addTranscript(action.role, action.text);
-        else if (profile.halfDuplex && action.role === 'assistant') {
-          if (action.text) {
-            const turn = ensureTurn('assistant');
-            turn.value = action.text;
-            turn.text.textContent = action.text;
-          }
-        } else finishTranscript(action.role, action.text);
+        handleTranscriptEvent(action);
         break;
       case 'done':
         clearTimeout(turnTimeout);
@@ -450,7 +474,11 @@
         sessionCloseResolver = null;
         break;
       case 'error':
-        await failSession(action.message);
+        if (action.fatal) { await failSession(action.message); break; }
+        // A rejected frame or a refused update costs one operation, not the
+        // call: report it and keep listening.
+        appendLog(action.message, true);
+        runtimeDetail.textContent = action.message;
         break;
       default: break;
     }
@@ -461,8 +489,15 @@
     playbackRate = playbackContext.sampleRate;
     await playbackContext.audioWorklet.addModule(staticAssetUrl('static/playback_worklet.js'));
     playbackNode = new AudioWorkletNode(playbackContext, 'fullduplex-pcm-playback');
+    const currentPlaybackNode = playbackNode;
     playbackNode.port.onmessage = (message) => {
+      if (playbackNode !== currentPlaybackNode) return;
       if (message.data.type === 'playback-started') setPlayback('Playing');
+      else if (message.data.type === 'playback-stopped') {
+        // The old response may report after the next one has started. ACK its
+        // own cursor without changing the current response's UI state.
+        if (profile.playbackAck) sendPlaybackAck(message.data.responseId, Number(message.data.playedMs) || 0);
+      }
       else if (message.data.type === 'playback-drained') playbackDrained(message.data);
       else if (message.data.type === 'playback-underrun') {
         runtimeDetail.textContent = `Playback underrun ${message.data.underrunMs || 0} ms`;
@@ -528,10 +563,22 @@
         appendLog(`websocket open  ${url}`);
       };
       current.onmessage = (message) => {
-        if (typeof message.data !== 'string' || socket !== current) return;
+        if (typeof message.data !== 'string' || (socket !== current && closingSocket !== current)) return;
         let event;
         try { event = JSON.parse(message.data); }
-        catch (error) { rejectOnce(`Invalid server event: ${error.message}`); return; }
+        catch (error) {
+          if (socket !== current) return;
+          const detail = `Invalid server event: ${error.message}`;
+          if (!settled) rejectOnce(detail);
+          else void failSession(detail);
+          return;
+        }
+        // Shutdown has detached the active socket. Only its close acknowledgement
+        // may pass, directly: the event queue can itself be awaiting cleanup.
+        if (closingSocket === current) {
+          if (event?.type === 'session.closed' && sessionCloseResolver) sessionCloseResolver();
+          return;
+        }
         const action = profile.mapEvent(event);
         if (action.kind === 'error' && !settled) {
           rejectOnce(action.message);
@@ -615,13 +662,23 @@
     await cameraPreview.play().catch(() => {});
     // Official omni-duplex cadence: one JPEG (quality 0.7) per ~1 s chunk,
     // no client-side resize (the server normalizes at scale_resolution=448).
-    cameraTimer = window.setInterval(() => {
+    const captureCameraFrame = () => {
       if (!cameraStream || cameraPreview.videoWidth === 0) return;
-      cameraCanvas.width = cameraPreview.videoWidth;
-      cameraCanvas.height = cameraPreview.videoHeight;
-      cameraCanvas.getContext('2d').drawImage(cameraPreview, 0, 0);
-      cameraPendingFrame = cameraCanvas.toDataURL('image/jpeg', 0.7).split(',')[1];
-    }, 1000);
+      const scale = profile.cameraMaxDimension
+        ? Math.min(1, profile.cameraMaxDimension / Math.max(cameraPreview.videoWidth, cameraPreview.videoHeight)) : 1;
+      cameraCanvas.width = Math.max(1, Math.round(cameraPreview.videoWidth * scale));
+      cameraCanvas.height = Math.max(1, Math.round(cameraPreview.videoHeight * scale));
+      cameraCanvas.getContext('2d').drawImage(cameraPreview, 0, 0, cameraCanvas.width, cameraCanvas.height);
+      const frame = cameraCanvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+      if (profile.imageMessages) {
+        if (connectionReady && socket?.readyState === WebSocket.OPEN) {
+          for (const event of profile.imageMessages(frame)) socket.send(JSON.stringify(event));
+        }
+      } else cameraPendingFrame = frame;
+    };
+    // Do not make the first spoken turn race a one-second timer.
+    captureCameraFrame();
+    cameraTimer = window.setInterval(captureCameraFrame, 1000);
     cameraButton.textContent = 'Camera off';
     cameraButton.classList.add('is-active');
     appendLog('camera on (1 fps omni frames)');
@@ -657,11 +714,12 @@
       const finish = () => {
         if (done) return;
         done = true;
+        clearTimeout(timer);
         if (sessionCloseResolver === finish) sessionCloseResolver = null;
         resolve();
       };
       sessionCloseResolver = finish;
-      window.setTimeout(finish, timeoutMs);
+      const timer = window.setTimeout(finish, timeoutMs);
     });
   }
 
@@ -690,7 +748,7 @@
     sendTimer = null;
     clockTimer = null;
     if (socket) {
-      const closingSocket = socket;
+      closingSocket = socket;
       socket = null;
       closingSocket.onclose = null;
       if (terminal && profile.closeSession && closingSocket.readyState === WebSocket.OPEN) {
@@ -699,6 +757,7 @@
         await closed;
       }
       closingSocket.close(1000, 'client stop');
+      closingSocket = null;
     }
     if (playbackNode) playbackNode.port.postMessage({ type: 'clear' });
     if (mediaStream) {

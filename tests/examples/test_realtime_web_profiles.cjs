@@ -43,7 +43,7 @@ test('STT uses the shipped commit sequence and audio payload, including each new
   assert.equal(stt.mapEvent({ type: 'transcription.delta', delta: 'hello' }).role, 'assistant');
 });
 
-test('Qwen strips native URL flags and never sends camera or playback ACK', () => {
+test('Qwen enables camera and playback ACK only for the duplex VAD profile', () => {
   for (const adapter of ['stt', 'vad']) {
     const p = profiles['qwen3-turn']({ ...config, adapter });
     const url = new URL(p.url({ ...config, realtimePath: 'wss://backend/v1/realtime?native_duplex=1&minicpmo45_native_duplex=1' }, 'http://localhost/'));
@@ -52,22 +52,20 @@ test('Qwen strips native URL flags and never sends camera or playback ACK', () =
     assert.equal(url.searchParams.has('native_duplex'), false);
     assert.equal(url.searchParams.has('minicpmo45_native_duplex'), false);
     assert.equal(p.append('PCM', 'JPEG').video_frames, undefined);
-    assert.equal(p.ack('r', 100), null);
-    assert.equal(p.camera, false);
+    assert.equal(plain(p.imageMessages('JPEG')).length, adapter === 'vad' ? 1 : 0);
+    assert.equal(p.ack('r', 100)?.type || null, adapter === 'vad' ? 'playback.ack' : null);
+    assert.equal(p.camera, adapter === 'vad');
     assert.equal(p.mapEvent({ type: 'response.listen' }).kind, 'ignore');
   }
 });
 
-test('VAD uses nested format and explicit non-interrupting endpoint detection', () => {
+test('VAD uses nested format and interruptible endpoint detection', () => {
   const vad = profiles['qwen3-turn']({ ...config, adapter: 'vad' });
-  const [update, historyUpdate] = vad.initialMessages(config, 'help');
+  const [update] = vad.initialMessages(config, 'help');
   assert.deepEqual(plain(update.session.audio.input), {
-    format: { type: 'audio/pcm', rate: 16000 },
+    format: { type: 'audio/pcm', rate: 24000 },
     turn_detection: { type: 'server_vad', threshold: 0.5, prefix_padding_ms: 300,
-      silence_duration_ms: 500, create_response: true, interrupt_response: false },
-  });
-  assert.deepEqual(plain(historyUpdate), {
-    type: 'session.update', session: { playback_commit_policy: 'commit_all_on_done' },
+      silence_duration_ms: 500, create_response: true, interrupt_response: true },
   });
   assert.equal(update.session.extra_body, undefined);
   assert.deepEqual(plain(vad.commitMessages()), []);
@@ -151,6 +149,9 @@ function shell(profileName, adapter = 'stt', options = {}) {
     async echo() {
       for (const [id, timer] of timers) if (timer.ms === 300) { timers.delete(id); await timer.fn(); }
     },
+    async turnWatchdog() {
+      for (const [id, timer] of timers) if (timer.ms === 120000) { timers.delete(id); await timer.fn(); }
+    },
   };
 }
 
@@ -176,22 +177,53 @@ test('shared shell STT sends final commit and starts a fresh second turn only af
   await app.ui.stopSession({ terminal: false });
 });
 
-test('VAD gates input on backpressure and waits for response.done after audio drain', async () => {
+test('VAD keeps uploading while generating and waits for response.done after audio drain', async () => {
   const app = shell('qwen3-turn', 'vad');
   await app.ui.startSession();
   await app.ui.handleEvent({ type: 'error', code: 'input_backpressure' });
-  assert.equal(app.ui.microphoneUploadEnabled(), false);
+  assert.equal(app.ui.microphoneUploadEnabled(), true);
   await app.ui.handleEvent({ type: 'response.created', response: { id: 'r1' } });
   await app.ui.handleEvent({ type: 'response.audio.delta', delta: 'AAAAAA==', response_id: 'r1' });
   await app.ui.handleEvent({ type: 'response.audio.done', response_id: 'r1' });
   app.ui.playbackDrained({ responseId: 'r1', playedMs: 1 });
   await app.echo();
-  assert.equal(app.ui.microphoneUploadEnabled(), false, 'audio.done is not terminal');
+  assert.equal(app.ui.microphoneUploadEnabled(), true, 'continuous capture remains enabled');
+  assert.equal(app.ui.state().assistantActive, true, 'audio drain must wait for response.done');
+  assert.equal(app.sockets[0].sent.at(-1).type, 'playback.ack');
   await app.ui.handleEvent({ type: 'response.done', response: { id: 'r1' } });
   await app.echo();
   assert.equal(app.ui.microphoneUploadEnabled(), true);
   assert.equal(app.sockets.length, 1, 'VAD keeps its session');
   assert.equal(app.sockets[0].sent.some(e => e.type === 'input_audio_buffer.commit'), false);
+  await app.ui.stopSession({ terminal: false });
+});
+
+test('a rejected operation is reported without hanging up the call', async () => {
+  const app = shell('qwen3-turn', 'vad');
+  await app.ui.startSession();
+  await app.ui.handleEvent({ type: 'error', code: 'invalid_image', error: 'input_image requires a JPEG or PNG base64 data URL' });
+  assert.equal(app.ui.state().running, true, 'one refused image must not end the session');
+  assert.equal(app.ui.state().connectionReady, true);
+  assert.match(app.elements.get('runtimeDetail').textContent, /JPEG or PNG/);
+  await app.ui.stopSession({ terminal: false });
+});
+
+test('a session-level error still tears the call down', async () => {
+  const app = shell('qwen3-turn', 'vad');
+  await app.ui.startSession();
+  await app.ui.handleEvent({ type: 'error', code: 'unknown_session', error: 'Unknown or closed duplex session' });
+  assert.equal(app.ui.state().running, false);
+  assert.equal(app.elements.get('connectionState').textContent, 'Error');
+});
+
+test('an interrupted response disarms the turn watchdog it left armed', async () => {
+  const app = shell('qwen3-turn', 'vad');
+  await app.ui.startSession();
+  await app.ui.handleEvent({ type: 'response.created', response: { id: 'r1' } });
+  await app.ui.handleEvent({ type: 'error', code: 'input_backpressure' });
+  await app.ui.handleEvent({ type: 'response.done', response: { id: 'r1', status: 'cancelled' } });
+  await app.turnWatchdog();
+  assert.equal(app.ui.state().running, true, 'barge-in must not time the session out two minutes later');
   await app.ui.stopSession({ terminal: false });
 });
 
@@ -241,4 +273,140 @@ test('Qwen does not duplicate text and audio-transcript channels', async () => {
   assert.equal(turns.length, 1);
   assert.equal(turns[0].children[1].textContent, 'Hello');
   await app.ui.stopSession({ terminal: false });
+});
+
+const flushTasks = async () => { for (let i = 0; i < 40; i++) await Promise.resolve(); };
+
+test('closing socket accepts only session.closed and completes without the fallback timer', async () => {
+  const app = shell('minicpm-native');
+  await app.ui.startSession();
+  const old = app.sockets[0];
+  let stopped = false;
+  const stopping = app.ui.stopSession().then(() => { stopped = true; });
+  assert.equal(old.sent.at(-1).type, 'session.close');
+  old.onmessage({ data: JSON.stringify({ type: 'session.updated' }) });
+  await flushTasks();
+  assert.equal(stopped, false);
+  old.onmessage({ data: JSON.stringify({ type: 'session.closed' }) });
+  await flushTasks();
+  assert.equal(stopped, true, 'must finish without firing the timeout');
+  await stopping;
+  await app.ui.startSession();
+  old.onmessage({ data: JSON.stringify({ type: 'session.closed' }) });
+  old.onmessage({ data: '{broken' });
+  await flushTasks();
+  assert.equal(app.ui.state().running, true, 'stale socket cannot affect a new session');
+  await app.ui.stopSession({ terminal: false });
+});
+
+test('malformed JSON before readiness rejects the handshake and cleans up', async () => {
+  const app = shell('qwen3-turn', 'vad', { silent: true });
+  const starting = app.ui.startSession();
+  await flushTasks();
+  app.sockets[0].onmessage({ data: '{broken' });
+  await starting;
+  assert.equal(app.ui.state().running, false);
+  assert.equal(app.sockets[0].readyState, 3);
+  assert.equal(app.elements.get('connectionState').textContent, 'Error');
+  assert.match(app.elements.get('runtimeDetail').textContent, /Invalid server event/);
+});
+
+test('malformed JSON after readiness fails the session and releases resources', async () => {
+  const app = shell('qwen3-turn', 'vad');
+  await app.ui.startSession();
+  app.sockets[0].onmessage({ data: '{broken' });
+  await flushTasks();
+  assert.equal(app.ui.state().running, false);
+  assert.equal(app.ui.microphoneUploadEnabled(), false);
+  assert.equal(app.sockets[0].readyState, 3);
+  assert.equal(app.elements.get('connectionState').textContent, 'Error');
+  assert.match(app.elements.get('runtimeDetail').textContent, /Invalid server event/);
+});
+
+
+test('Qwen VAD interruption clears playback while continuing microphone upload', async () => {
+  const app = shell('qwen3-turn', 'vad');
+  await app.ui.startSession();
+  await app.ui.handleEvent({ type: 'response.created', response: { id: 'r1' } });
+  await app.ui.handleEvent({ type: 'response.audio.delta', delta: 'AAAAAA==', response_id: 'r1' });
+  await app.ui.handleEvent({ type: 'output_audio_buffer.cleared', response_id: 'r1' });
+  assert.equal(app.ui.state().assistantActive, false);
+  assert.equal(app.ui.microphoneUploadEnabled(), true);
+  assert.ok(app.nodes.some(node => node.sent.some(message => message.type === 'clear')));
+  await app.ui.stopSession({ terminal: false });
+});
+
+
+test('Qwen runtime errors do not suggest changing a working deployment', () => {
+  const p = profiles['qwen3-turn']({ adapter: 'vad' });
+  const message = 'playback.ack arrived after a later user input was committed.';
+  assert.equal(p.mapEvent({ type: 'error', code: 'playback_ack_too_late', error: message }).message, message);
+});
+
+test('interrupted playback reports its cursor before clear resets it', () => {
+  let Playback;
+  const messages = [];
+  const ctx = vm.createContext({
+    sampleRate: 24000,
+    AudioWorkletProcessor: class { constructor() { this.port = { postMessage: m => messages.push(m) }; } },
+    registerProcessor: (_name, cls) => { Playback = cls; },
+  });
+  vm.runInContext(fs.readFileSync(path.join(root, 'playback_worklet.js'), 'utf8'), ctx);
+  const player = new Playback();
+  player.handleMessage({ type: 'audio', responseId: 'old', pcm: new Int16Array(24000), initialBufferMs: 0 });
+  player.process([], [[new Float32Array(2400)]]);
+  player.handleMessage({ type: 'clear' });
+  const report = messages.find(m => m.type === 'playback-stopped');
+  assert.equal(report.responseId, 'old');
+  assert.equal(report.playedMs, 100);
+  assert.equal(player.playedFrames, 0);
+  assert.equal(player.bufferedFrames(), 0);
+  player.handleMessage({ type: 'clear' });
+  assert.equal(messages.filter(m => m.type === 'playback-stopped').length, 1);
+});
+
+test('late interruption cursor acknowledges old response without finishing the new response', async () => {
+  const app = shell('qwen3-turn', 'vad');
+  await app.ui.startSession();
+  const player = app.nodes.find(n => n.name === 'fullduplex-pcm-playback');
+  await app.ui.handleEvent({ type: 'response.created', response: { id: 'old' } });
+  await app.ui.handleEvent({ type: 'output_audio_buffer.cleared', response_id: 'old' });
+  await app.ui.handleEvent({ type: 'response.created', response: { id: 'new' } });
+  player.port.onmessage({ data: { type: 'playback-stopped', responseId: 'old', playedMs: 100 } });
+  const ack = app.sockets[0].sent.find(m => m.type === 'playback.ack');
+  assert.equal(ack.response_id, 'old');
+  assert.equal(ack.played_ms, 100);
+  assert.equal(app.ui.state().assistantActive, true);
+});
+
+
+test('Qwen camera frames ride the OpenAI image interface, not the audio append', () => {
+  const p = profiles['qwen3-turn']({ ...config, adapter: 'vad' });
+  assert.deepEqual(plain(p.append('PCM', 'JPEG')), { type: 'input_audio_buffer.append', audio: 'PCM' });
+
+  const [created] = plain(p.imageMessages('JPEG'));
+  assert.equal(created.type, 'conversation.item.create');
+  assert.equal(created.item.role, 'user');
+  assert.deepEqual(created.item.content, [
+    { type: 'input_image', image_url: 'data:image/jpeg;base64,JPEG' },
+  ]);
+});
+
+test('the camera retires its oldest image instead of exhausting the session budget', () => {
+  const p = profiles['qwen3-turn']({ ...config, adapter: 'vad' });
+  const ids = [];
+  for (let i = 0; i < 8; i++) {
+    const messages = plain(p.imageMessages('JPEG'));
+    assert.equal(messages.length, 1, 'nothing to retire while under the budget');
+    ids.push(messages[0].item.id);
+  }
+  // The engine counts what it already stores, so the delete has to lead.
+  const ninth = plain(p.imageMessages('JPEG'));
+  assert.deepEqual(ninth[0], { type: 'conversation.item.delete', item_id: ids[0] });
+  assert.equal(ninth[1].type, 'conversation.item.create');
+  assert.equal(new Set(ids).size, 8, 'item ids must be distinct to be deletable');
+
+  // A new call reopens the budget; stale ids from the old one must not linger.
+  assert.equal(plain(p.initialMessages(config, 'x')).length > 0, true);
+  assert.equal(plain(p.imageMessages('JPEG')).length, 1);
 });

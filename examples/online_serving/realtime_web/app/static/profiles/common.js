@@ -8,6 +8,21 @@
     if (url.protocol === 'https:') url.protocol = 'wss:';
     return url;
   };
+  /* Errors that leave the session unusable, so the shell has to tear it down.
+     Everything else costs one operation --- a rejected image, a refused
+     session.update, a late playback ack --- and the call carries on.
+     'runtime_append_failed' is deliberately absent: the engine reports it and
+     keeps the session, unlike 'runtime_append_task_failed' which kills it. */
+  profiles.fatalErrorCodes = new Set([
+    'unknown_session',
+    'session_closed',
+    'resource_exhausted',
+    'unsupported',
+    'unsupported_turn_detection',
+    'server_vad_unavailable',
+    'runtime_append_task_failed',
+    'internal_error',
+  ]);
   profiles.event = (event) => {
     const responseId = event.response_id || event.response?.id || null;
     const action = (kind, extra = {}) => ({ kind, responseId, ...extra });
@@ -27,10 +42,14 @@
         return action('text-final', { role: 'user', text: event.transcript || '' });
       case 'response.done': return action('done');
       case 'session.closed': return action('closed');
-      case 'error': return action('error', {
-        code: event.code || event.error?.code,
-        message: typeof event.error === 'string' ? event.error : event.error?.message || event.message || event.code || 'Server error',
-      });
+      case 'error': {
+        const code = event.code || event.error?.code;
+        return action('error', {
+          code,
+          fatal: profiles.fatalErrorCodes.has(code),
+          message: typeof event.error === 'string' ? event.error : event.error?.message || event.message || code || 'Server error',
+        });
+      }
       default: return action('ignore');
     }
   };
