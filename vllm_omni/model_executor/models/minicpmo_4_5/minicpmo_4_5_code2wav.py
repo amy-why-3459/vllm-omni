@@ -289,6 +289,11 @@ class MiniCPMO45Code2Wav(nn.Module):
             # row, so size it for the most requests this stage ever batches.
             max_num_seqs = getattr(getattr(vllm_config, "scheduler_config", None), "max_num_seqs", None)
             micro_batch_size = min(int(max_num_seqs), max_graph_batch or 16) if max_num_seqs else None
+        self._encoder_graph_config = {
+            "enabled": bool(extra.get("enable_code2wav_encoder_graph", False)),
+            "max_graphs": int(extra.get("code2wav_encoder_max_graphs", 8)),
+            "capture_after": int(extra.get("code2wav_encoder_capture_after", 2)),
+        }
         self._cfm_graph_config = {
             "enabled": bool(extra.get("enable_cfm_graph", False)),
             "max_graphs": int(extra.get("cfm_max_graphs", 32)),
@@ -1097,6 +1102,7 @@ class MiniCPMO45Code2Wav(nn.Module):
             connector_config=self._connector_config,
             hift_graph_config=self._hift_graph_config,
             cfm_graph_config=self._cfm_graph_config,
+            encoder_graph_config=self._encoder_graph_config,
             bfloat16_attention_cache=bool(extra.get("code2wav_bfloat16_attention_cache", False)),
             setup_cache_size=self._setup_cache_size,
         )

@@ -93,6 +93,15 @@ def test_hift_graph_replay_matches_eager_for_uncached_and_cached_shapes() -> Non
             torch.testing.assert_close(actual_speech, expected_speech, rtol=1e-4, atol=1e-5)
             torch.testing.assert_close(actual_source, expected_source, rtol=1e-4, atol=1e-5)
 
+        torch.accelerator.synchronize()
+        # A caller-stream sync inside replay would have to finish this first.
+        torch.cuda._sleep(200_000_000)
+        queued = torch.cuda.Event()
+        queued.record()
+        wrapper.replay(cases[0][0], cases[0][1])
+        assert not queued.query()
+        torch.accelerator.synchronize()
+
 
 class _FakeGraph:
     def replay(self) -> None:
@@ -355,6 +364,7 @@ def _cfm_mock_wrapper(monkeypatch: pytest.MonkeyPatch, *, max_graphs: int = 1) -
     return wrapper
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_cfm_unseen_shape_is_lazily_captured(monkeypatch: pytest.MonkeyPatch) -> None:
     wrapper = _cfm_mock_wrapper(monkeypatch)
 
@@ -365,6 +375,7 @@ def test_cfm_unseen_shape_is_lazily_captured(monkeypatch: pytest.MonkeyPatch) ->
     wrapper.graph_fn.assert_called_once()
 
 
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is required")
 def test_cfm_returning_no_entry_falls_back_to_eager(monkeypatch: pytest.MonkeyPatch) -> None:
     """A capture that yields no entry must still serve the request eagerly.
 

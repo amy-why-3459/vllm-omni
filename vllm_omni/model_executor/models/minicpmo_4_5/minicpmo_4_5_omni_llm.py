@@ -55,7 +55,7 @@ from transformers.modeling_outputs import BaseModelOutput, BaseModelOutputWithPo
 from transformers.modeling_utils import PreTrainedModel
 from transformers.models.whisper.modeling_whisper import ACT2FN
 
-from vllm_omni.model_executor.models.minicpmo_4_5.encoder_cuda_graph import EncoderCudaGraph
+from vllm_omni.model_executor.models.minicpmo_4_5.encoder_graph import make_encoder_graph
 
 try:
     from transformers.models.whisper.modeling_whisper import WHISPER_ATTENTION_CLASSES
@@ -1582,7 +1582,7 @@ class SiglipVisionTransformer(SiglipPreTrainedModel):
         self.encoder = SiglipEncoder(config)
         self.post_layernorm = nn.LayerNorm(embed_dim, eps=config.layer_norm_eps)
         self._use_flash_attention_2 = config._attn_implementation == "flash_attention_2"
-        self._encoder_graph: EncoderCudaGraph | None = None
+        self._encoder_graph = None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -3939,11 +3939,6 @@ class MiniCPMO45OmniLLMForConditionalGeneration(nn.Module, SupportsMultiModal, S
 
         self.config = config
         self.multimodal_config = multimodal_config
-        # Model-local opt-out for A/B measurements; --enforce-eager always wins.
-        encoder_graphs = (
-            bool(getattr(config, "encoder_cuda_graph", True)) and not vllm_config.model_config.enforce_eager
-        )
-
         # Initialize image processor
         self.image_processor = MiniCPMVImageProcessor(
             max_slice_nums=config.slice_config.max_slice_nums,
@@ -3962,8 +3957,7 @@ class MiniCPMO45OmniLLMForConditionalGeneration(nn.Module, SupportsMultiModal, S
                 config.vision_config._attn_implementation = "eager"
 
             self.vpm = SiglipVisionTransformer(config.vision_config)
-            if encoder_graphs:
-                self.vpm._encoder_graph = EncoderCudaGraph(self.vpm._encode_last_hidden_state)
+            self.vpm._encoder_graph = make_encoder_graph(self.vpm._encode_last_hidden_state, vllm_config)
             # Drop last layer if configured
             if config.drop_vision_last_layer:
                 self.vpm.encoder.layers = self.vpm.encoder.layers[:-1]
@@ -4031,7 +4025,7 @@ class MiniCPMO45OmniLLMForConditionalGeneration(nn.Module, SupportsMultiModal, S
             self.audio_encoder_layer = None
             self.audio_past_key_values = None
 
-        self._audio_encoder_graph = EncoderCudaGraph(self._encode_audio_features) if encoder_graphs else None
+        self._audio_encoder_graph = make_encoder_graph(self._encode_audio_features, vllm_config)
         self.mm_token_ids = set[int]()
         self.make_empty_intermediate_tensors = self.llm.make_empty_intermediate_tensors
 

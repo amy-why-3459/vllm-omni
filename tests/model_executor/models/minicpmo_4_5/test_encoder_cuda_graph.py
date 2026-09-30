@@ -4,7 +4,7 @@
 import pytest
 import torch
 
-from vllm_omni.model_executor.models.minicpmo_4_5.encoder_cuda_graph import EncoderCudaGraph
+from vllm_omni.model_executor.models.minicpmo_4_5.encoder_graph import EncoderCudaGraph
 from vllm_omni.model_executor.models.minicpmo_4_5.minicpmo_4_5_omni_llm import (
     SiglipVisionConfig,
     SiglipVisionTransformer,
@@ -13,9 +13,20 @@ from vllm_omni.model_executor.models.minicpmo_4_5.minicpmo_4_5_omni_llm import (
 pytestmark = [pytest.mark.core_model]
 
 
+def _make_graph(forward, **kwargs):
+    from vllm.config import ModelConfig, VllmConfig
+    from vllm.config.multimodal import MultiModalConfig
+
+    config = VllmConfig()
+    # The manager only needs multimodal limits; no checkpoint is loaded here.
+    config.model_config = ModelConfig.__new__(ModelConfig)
+    config.model_config.multimodal_config = MultiModalConfig()
+    return EncoderCudaGraph(forward, config, **kwargs)
+
+
 @pytest.mark.cpu
 def test_cpu_and_grad_paths_remain_eager():
-    graph = EncoderCudaGraph(lambda x, mask: x.sin() if mask is None else x.sin() + mask)
+    graph = _make_graph(lambda x, mask: x.sin() if mask is None else x.sin() + mask)
     x = torch.randn(2, 3, requires_grad=True)
     graph(x, None).sum().backward()
     torch.testing.assert_close(x.grad, x.detach().cos())
@@ -27,7 +38,7 @@ def test_cpu_and_grad_paths_remain_eager():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @torch.inference_mode()
 def test_replay_refreshes_inputs_preserves_outputs_and_bounds_shapes():
-    graph = EncoderCudaGraph(lambda x, mask: x.sin() if mask is None else x.sin() + mask, max_graphs=2)
+    graph = _make_graph(lambda x, mask: x.sin() if mask is None else x.sin() + mask, max_graphs=2)
     x = torch.randn(2, 8, device="cuda")
     mask = torch.randn_like(x)
     graph(x, mask)
@@ -40,6 +51,11 @@ def test_replay_refreshes_inputs_preserves_outputs_and_bounds_shapes():
     graph(x, None)
     torch.testing.assert_close(graph(x, None), x.sin())
     assert len(graph.graphs) == 2
+    from vllm.v1.worker.encoder_cudagraph import EncoderCudaGraphManager
+
+    assert all(isinstance(entry, EncoderCudaGraphManager) for entry in graph.graphs.values())
+    assert sum(entry.graph_hits for entry in graph.graphs.values()) == 3
+    assert graph.vllm_config.compilation_config.encoder_cudagraph_token_budgets == []
     for size in range(3, 24):
         other = torch.randn(size, 8, device="cuda")
         torch.testing.assert_close(graph(other, None), other.sin())
@@ -65,7 +81,7 @@ def test_vision_graph_handles_changed_mask_and_retained_embeddings():
     sizes = torch.tensor([[2, 2], [1, 2]], dtype=torch.int32)
     mask = torch.tensor([[[1, 1, 1, 1]], [[1, 1, 0, 0]]], device="cuda", dtype=torch.bool)
     reference = model(pixels, mask, sizes).last_hidden_state
-    model._encoder_graph = EncoderCudaGraph(model._encode_last_hidden_state)
+    model._encoder_graph = _make_graph(model._encode_last_hidden_state)
     model(pixels, mask, sizes)
     output = model(pixels, mask, sizes).last_hidden_state
     torch.testing.assert_close(output, reference)
@@ -127,7 +143,7 @@ def test_audio_graph_refreshes_mask_and_matches_eager():
         "audio_feature_lens": torch.tensor([[100], [80]], device="cuda"),
     }
     expected = model.get_audio_hidden_states(data)
-    graph = EncoderCudaGraph(model._encode_audio_features)
+    graph = _make_graph(model._encode_audio_features)
     model._audio_encoder_graph = graph
     model.get_audio_hidden_states(data)
     actual = model.get_audio_hidden_states(data)
@@ -180,7 +196,7 @@ def test_fp16_audio_keeps_host_overflow_check_eager():
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
 @torch.inference_mode()
 def test_one_off_shapes_do_not_exhaust_capture_admission():
-    graph = EncoderCudaGraph(torch.sin, max_graphs=1)
+    graph = _make_graph(torch.sin, max_graphs=1)
     for size in range(1, 20):
         graph(torch.zeros(size, device="cuda"))
     assert len(graph._seen) == 4
@@ -189,3 +205,25 @@ def test_one_off_shapes_do_not_exhaust_capture_admission():
     graph(x)
     torch.testing.assert_close(graph(x), x.sin())
     assert len(graph.graphs) == 1
+
+
+@pytest.mark.cuda
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA required")
+@torch.inference_mode()
+def test_managers_do_not_share_buffers_between_streams():
+    graph = _make_graph(torch.sin)
+    streams = [torch.cuda.Stream(), torch.cuda.Stream()]
+    outputs = []
+    for i, stream in enumerate(streams):
+        with torch.cuda.stream(stream):
+            value = torch.full((4, 8), float(i + 1), device="cuda")
+            graph(value)
+            output = graph(value)
+            graph(value + 1)
+            outputs.append((output, value.sin()))
+    for stream in streams:
+        torch.cuda.current_stream().wait_stream(stream)
+    assert len(graph.graphs) == 2
+    for actual, expected in outputs:
+        torch.testing.assert_close(actual, expected)
+    assert not graph.vllm_config.compilation_config.encoder_cudagraph_token_budgets

@@ -39,6 +39,11 @@ class HiFTGraphWrapper:
         self.decode_fn = token2wav.hift.inference
         self.graph_fn = token2wav.hift._inference_pre_istft
         self.finalize_fn = token2wav.hift._finalize_decode
+        # torch.istft reads the overlap envelope back on the caller stream
+        # (aten::equal → item → cudaStreamSynchronize) after every chunk.
+        enable_cached_istft = getattr(token2wav.hift, "enable_cached_istft", None)
+        if callable(enable_cached_istft):
+            enable_cached_istft()
         self.codec_chunk_frames = connector_config["codec_chunk_frames"]
         self.codec_left_context_frames = connector_config["codec_left_context_frames"]
         lookahead_layer = getattr(token2wav.flow.encoder, "pre_lookahead_layer", None)
@@ -121,6 +126,12 @@ class HiFTGraphWrapper:
         self.static_magnitude_outputs[key] = static_magnitude_output
         self.static_phase_outputs[key] = static_phase_output
         self.static_cache_source_outputs[key] = static_cache_source_output
+        # The cached ISTFT still synchronizes the first time it sees a frame
+        # count: once for the envelope check, and once inside cuFFT while it
+        # builds the plan for that length. Do both here, off the request path,
+        # so replay of this shape does not drain kernels already queued on
+        # the caller stream.
+        self.finalize_fn(static_magnitude_output, static_phase_output)
         logger.info("Captured HiFT CUDA Graph for shape %s", key)
 
     def replay(self, speech_feat, cache_source):

@@ -15,6 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from vllm.logger import init_logger
 
+from .chunk_encoder_graph import ChunkEncoderGraph
 from .cuda_graph_wrapper import (
     CFMGraphWrapper,
     HiFTGraphWrapper,
@@ -256,6 +257,7 @@ class BatchedToken2Wav(nn.Module):
         connector_config: Mapping[str, int] | None = None,
         hift_graph_config: Mapping[str, Any] | None = None,
         cfm_graph_config: Mapping[str, Any] | None = None,
+        encoder_graph_config: Mapping[str, Any] | None = None,
         bfloat16_attention_cache: bool = False,
         setup_cache_size: int = 1,
     ):
@@ -268,6 +270,16 @@ class BatchedToken2Wav(nn.Module):
         self._trt_stepper = trt_stepper
         self.flow = token2wav.flow
         self.hift = token2wav.hift
+        encoder_cfg = dict(encoder_graph_config or {})
+        self._chunk_encoder_graph = (
+            ChunkEncoderGraph(
+                self._encode_chunk_eager,
+                max_graphs=int(encoder_cfg.get("max_graphs", 8)),
+                capture_after=int(encoder_cfg.get("capture_after", 2)),
+            )
+            if encoder_cfg.get("enabled", False)
+            else None
+        )
         enable_cached_istft = getattr(self.hift, "enable_cached_istft", None)
         if callable(enable_cached_istft):
             enable_cached_istft()
@@ -529,6 +541,21 @@ class BatchedToken2Wav(nn.Module):
         att_cache: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         self._ensure_relpos_pe(tokens, att_cache)
+        graph = getattr(self, "_chunk_encoder_graph", None)
+        if graph is not None and not self.flow.training:
+            # The module tree is fixed after loading; only PE storage changes.
+            # Avoid walking every Conformer submodule on every audio chunk.
+            modules = getattr(self, "_encoder_position_modules", None)
+            if modules is None:
+                modules = tuple(module for module in self.flow.encoder.modules() if hasattr(module, "pe"))
+                self._encoder_position_modules = modules
+            tables = tuple(module.pe for module in modules if isinstance(module.pe, torch.Tensor))
+            return graph(
+                tokens, last_chunk=last_chunk, cnn_cache=cnn_cache, att_cache=att_cache, position_tables=tables
+            )
+        return self._encode_chunk_eager(tokens, last_chunk=last_chunk, cnn_cache=cnn_cache, att_cache=att_cache)
+
+    def _encode_chunk_eager(self, tokens, *, last_chunk, cnn_cache, att_cache):
         embedded = self.flow.input_embedding(tokens)
         hidden, new_cnn, new_att = self.flow.encoder.forward_chunk(
             xs=embedded,

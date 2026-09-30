@@ -27,6 +27,12 @@ connectors:
       # HiFTGraphWrapper.derive_capture_bucket_size explicitly includes it.
       enable_hift_graph: true
       enable_cfm_graph: true
+      # Opt-in exact-shape streaming Conformer graphs (CUDA only).
+      enable_code2wav_encoder_graph: false
+      code2wav_encoder_max_graphs: 8
+      # Raise for workloads with frequent short-lived batch/cache shapes to
+      # avoid paying capture costs before sufficient reuse is observed.
+      code2wav_encoder_capture_after: 8
       # Whole-Euler CUDA graphs exist for batch 1, 2, 4, ... up to
       # micro_batch_size, which defaults to Stage 2 max_num_seqs: all graphs
       # share one attention-cache arena of that many requests (~0.6 GiB each
@@ -42,7 +48,7 @@ stages:
     gpu_memory_utilization: 0.55
     enforce_eager: false
     tensor_parallel_size: 1
-    max_num_batched_tokens: 16384
+    max_num_batched_tokens: 32768
     devices: "0"
     # Required for MiniCPM interleaved image/audio Daily-Omni packs (~78% recipe).
     # Keep these in YAML so they are applied through --deploy-config.
@@ -73,7 +79,7 @@ stages:
     # Leave device-level headroom for the colocated HiFi-GAN cuDNN workspace.
     gpu_memory_utilization: 0.15
     enforce_eager: false
-    max_num_batched_tokens: 8192
+    max_num_batched_tokens: 32768
     # Talker context is 4096 (tts_config.max_position_embeddings).
     max_model_len: 4096
     devices: "0"
@@ -127,11 +133,15 @@ platforms:
   npu:
     stages:
       - stage_id: 0
-        max_num_batched_tokens: 8192
+        # Opt in after validating capture support on the target torch-npu/CANN.
+        additional_config:
+          encoder_enable_npu_graph: false
+          encoder_max_npu_graphs: 4  # Per encoder (vision/audio).
+        max_num_batched_tokens: 32768
         compilation_config:
           cudagraph_mode: PIECEWISE
       - stage_id: 1
-        max_num_batched_tokens: 8192
+        max_num_batched_tokens: 32768
         compilation_config:
           cudagraph_mode: PIECEWISE
       - stage_id: 2
