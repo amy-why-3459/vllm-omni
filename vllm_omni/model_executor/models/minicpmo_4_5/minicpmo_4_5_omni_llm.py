@@ -3963,7 +3963,7 @@ class MiniCPMO45OmniLLMForConditionalGeneration(nn.Module, SupportsMultiModal, S
 
             self.vpm = SiglipVisionTransformer(config.vision_config)
             if encoder_graphs:
-                self.vpm._encoder_graph = EncoderCudaGraph(self.vpm._encode_last_hidden_state)
+                self.vpm._encoder_graph = EncoderCudaGraph(self.vpm._encode_last_hidden_state, vllm_config)
             # Drop last layer if configured
             if config.drop_vision_last_layer:
                 self.vpm.encoder.layers = self.vpm.encoder.layers[:-1]
@@ -4031,7 +4031,9 @@ class MiniCPMO45OmniLLMForConditionalGeneration(nn.Module, SupportsMultiModal, S
             self.audio_encoder_layer = None
             self.audio_past_key_values = None
 
-        self._audio_encoder_graph = EncoderCudaGraph(self._encode_audio_features) if encoder_graphs else None
+        self._audio_encoder_graph = (
+            EncoderCudaGraph(self._encode_audio_features, vllm_config) if encoder_graphs else None
+        )
         self.mm_token_ids = set[int]()
         self.make_empty_intermediate_tensors = self.llm.make_empty_intermediate_tensors
 
