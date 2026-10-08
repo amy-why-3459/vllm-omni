@@ -1,0 +1,61 @@
+Reserved 1 GPU(s): [7] for command execution
+Released automatically if no GPU usage is detected for 30m
+gpu run hold CUDA_VISIBLE_DEVICES=7
+CUDA_VISIBLE_DEVICES=7
+allowed-local-media-path=/data
+log: /data/why/scripts/minicpm.log
+Starting MiniCPM-o 4.5 server on port 28889 (logs → /data/why/scripts/minicpm.log)
+/data/why/vllm-omni/vllm_omni/version.py:55: RuntimeWarning: vLLM and vLLM-Omni appear to have mismatched major/minor versions:
+ --> vLLM-Omni version 0.1.dev38+g7f7e747fe
+ --> vLLM version 0.31.0
+This will likely cause compatibility issues.
+  warn_if_misaligned_vllm_version()
+(MainProcess pid=1875472) INFO 10-08 17:53:14 [logo.py:52]        █     █     █▄   ▄█       ▄▀▀▀▀▄ █▄   ▄█ █▄    █ ▀█▀ 
+(MainProcess pid=1875472) INFO 10-08 17:53:14 [logo.py:52]  ▄▄ ▄█ █     █     █ ▀▄▀ █  ▄▄▄  █    █ █ ▀▄▀ █ █ ▀▄  █  █  
+(MainProcess pid=1875472) INFO 10-08 17:53:14 [logo.py:52]   █▄█▀ █     █     █     █       █    █ █     █ █   ▀▄█  █  
+(MainProcess pid=1875472) INFO 10-08 17:53:14 [logo.py:52]    ▀▀  ▀▀▀▀▀ ▀▀▀▀▀ ▀     ▀        ▀▀▀▀  ▀     ▀ ▀     ▀ ▀▀▀ 
+(MainProcess pid=1875472) INFO 10-08 17:53:14 [logo.py:52] 
+(APIServer pid=1875472) INFO 10-08 17:53:14 [api_utils.py:347] vLLM server version 0.31.0, serving model /data/why/MiniCPM-o-4_5
+(APIServer pid=1875472) INFO 10-08 17:53:14 [api_utils.py:286] non-default args: {'model_tag': '/data/why/MiniCPM-o-4_5', 'port': 28889, 'model': '/data/why/MiniCPM-o-4_5', 'trust_remote_code': True, 'allowed_local_media_path': '/data', 'media_io_kwargs': {'video': {'fps': 1, 'num_frames': 128}}, 'interleave_mm_strings': True, 'profiler_config': ProfilerConfig(profiler='torch', torch_profiler_dir='/data/why/scripts/perf', torch_profiler_activities=None, proton_profiler_dir='', proton_context='shadow', proton_data='tree', proton_backend=None, proton_mode=None, proton_hook=None, proton_output_format=None, proton_graph_attribution=False, torch_profiler_with_stack=True, torch_profiler_with_flops=False, torch_profiler_use_gzip=False, torch_profiler_dump_cuda_time_total=False, torch_profiler_record_shapes=True, torch_profiler_with_memory=True, capture_torch_profiler=False, detailed_trace_annotation=False, ignore_frontend=False, delay_iterations=0, max_iterations=0, warmup_iterations=0, active_iterations=1, wait_iterations=0)}
+(APIServer pid=1875472) INFO 10-08 17:53:14 [omni_base.py:208] [DuplexOmni] Initializing with model /data/why/MiniCPM-o-4_5
+(APIServer pid=1875472) INFO 10-08 17:53:14 [omni_engine_base.py:163] [OmniEngine] Initializing with model /data/why/MiniCPM-o-4_5
+(APIServer pid=1875472) INFO 10-08 17:53:14 [omni_engine_base.py:312] [OmniEngine] Launching Orchestrator thread with 3 stages
+(APIServer pid=1875472) INFO 10-08 17:53:15 [initialization.py:443] Loaded OmniTransferConfig with 1 connector configurations
+(APIServer pid=1875472) WARNING 10-08 17:53:15 [utils.py:250] Dropping unknown OmniEngineArgs field 'enable_broadcast_weight_load' (not declared on the dataclass)
+(APIServer pid=1875472) WARNING 10-08 17:53:15 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_USE_FLASHINFER_MOE_FP16
+(APIServer pid=1875472) INFO 10-08 17:53:15 [model.py:699] Resolved architecture: MiniCPMO45OmniForConditionalGeneration
+(APIServer pid=1875472) INFO 10-08 17:53:15 [model.py:2109] Using max model len 40960
+(APIServer pid=1875472) WARNING 10-08 17:53:15 [model.py:1069] Model does not support mm_device_do_normalize, forcing mm_device_do_normalize = False.
+(APIServer pid=1875472) INFO 10-08 17:53:16 [scheduler.py:308] Chunked prefill is enabled with max_num_batched_tokens=16384.
+(APIServer pid=1875472) INFO 10-08 17:53:16 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+(APIServer pid=1875472) WARNING 10-08 17:53:16 [utils.py:250] Dropping unknown OmniEngineArgs field 'enable_broadcast_weight_load' (not declared on the dataclass)
+(APIServer pid=1875472) WARNING 10-08 17:53:17 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_USE_FLASHINFER_MOE_FP16
+(APIServer pid=1875472) INFO 10-08 17:53:17 [model.py:699] Resolved architecture: MiniCPMO45OmniForConditionalGeneration
+(APIServer pid=1875472) INFO 10-08 17:53:17 [model.py:2109] Using max model len 4096
+(APIServer pid=1875472) WARNING 10-08 17:53:17 [model.py:1069] Model does not support mm_device_do_normalize, forcing mm_device_do_normalize = False.
+(APIServer pid=1875472) INFO 10-08 17:53:17 [model.py:2109] Using max model len 4096
+(APIServer pid=1875472) INFO 10-08 17:53:17 [scheduler.py:308] Chunked prefill is enabled with max_num_batched_tokens=8192.
+(APIServer pid=1875472) INFO 10-08 17:53:17 [kernel.py:408] Final IR op priority after setting platform defaults: IrOpPriorityConfig(rms_norm=['native'], fused_add_rms_norm=['native'], gelu_and_mul_sparse=['triton', 'native'])
+(APIServer pid=1875472) WARNING 10-08 17:53:17 [utils.py:250] Dropping unknown OmniEngineArgs field 'enable_broadcast_weight_load' (not declared on the dataclass)
+(APIServer pid=1875472) WARNING 10-08 17:53:17 [interface.py:1355] Unknown vLLM environment variable detected: VLLM_USE_FLASHINFER_MOE_FP16
+(APIServer pid=1875472) INFO 10-08 17:53:46 [model.py:699] Resolved architecture: MiniCPMO45Code2Wav
+(APIServer pid=1875472) WARNING 10-08 17:53:46 [model.py:2616] User-specified max_model_len (65536) is greater than the derived max_model_len (max_position_embeddings=40960.0 or model_max_length=None in model's config.json). VLLM_ALLOW_LONG_MAX_MODEL_LEN must be used with extreme caution. If the model uses relative position encoding (RoPE), positions exceeding derived_max_model_len lead to nan. If the model uses absolute position encoding, positions exceeding derived_max_model_len will cause a CUDA array out-of-bounds error.
+(APIServer pid=1875472) INFO 10-08 17:53:46 [model.py:2109] Using max model len 65536
+(APIServer pid=1875472) WARNING 10-08 17:53:46 [arg_utils.py:2940] This model does not officially support disabling chunked prefill. Disabling this manually may cause the engine to crash or produce incorrect outputs.
+(APIServer pid=1875472) WARNING 10-08 17:53:46 [vllm.py:1706] Enforce eager set, disabling torch.compile, CUDAGraphs, and JIT kernel warmup. This is equivalent to setting -cc.mode=none -cc.cudagraph_mode=none and --kernel_config.enable_jit_warmup=False
+(APIServer pid=1875472) INFO 10-08 19:00:25 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-89f0ca85 total=1.01s engine=1.01s stages=[0:1.54s,1:3.98s,2:12.09s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:00:29 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-9241b536 total=1.37s engine=1.37s stages=[0:0.47s,1:0.30s,2:15.50s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:00:45 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-09817777 total=9.22s engine=9.22s stages=[0:1.41s,1:2.03s,2:31.41s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:00:53 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-65e9cc74 total=2.27s engine=2.27s stages=[0:0.55s,1:0.49s,2:39.57s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:01:08 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-c45c3702 total=9.29s engine=9.29s stages=[0:1.26s,1:1.83s,2:54.65s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:01:14 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-f88a1608 total=2.33s engine=2.33s stages=[0:0.53s,1:0.68s,2:60.79s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:01:29 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-dfae9f83 total=8.34s engine=8.34s stages=[0:1.34s,1:1.71s,2:75.87s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:01:44 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-f0905aa1 total=8.36s engine=8.36s stages=[0:1.46s,1:1.95s,2:91.01s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:01:59 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-f324df44 total=8.35s engine=8.35s stages=[0:1.55s,1:2.11s,2:106.13s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:02:15 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-a1a646ca total=8.50s engine=8.50s stages=[0:1.69s,1:2.57s,2:121.39s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:02:34 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-e7d3a833 total=13.67s engine=13.67s stages=[0:2.11s,1:4.13s,2:140.67s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:02:47 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-d1994b6f total=8.54s engine=8.54s stages=[0:1.30s,1:3.23s,2:296.35s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:02:55 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-aec2d19c total=3.65s engine=3.65s stages=[0:0.82s,1:1.73s,2:161.91s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:03:03 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-60dd08ed total=4.63s engine=4.63s stages=[0:1.08s,1:2.69s,2:332.86s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:03:09 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-eebba28f total=2.73s engine=2.73s stages=[0:0.99s,1:1.38s,2:176.13s] transfers=[0->1=0.00ms,1->2=0.00ms]
+(APIServer pid=1875472) INFO 10-08 19:04:14 [stats.py:902] [OmniTiming] req=resp-duplex-52d1e2346eb9448a97cb7da68f27d6ee-0-23390873 total=60.04s engine=60.04s stages=[0:0.47s,1:0.78s,2:179.06s] transfers=[0->1=0.00ms,1->2=0.00ms]
