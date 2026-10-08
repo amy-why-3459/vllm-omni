@@ -1,0 +1,28 @@
+{
+  "model": "/data/why/MiniCPM-o-4_5",
+  "modalities": [
+    "audio",
+    "text"
+  ],
+  "input_audio_format": "pcm16",
+  "output_audio_format": "pcm16",
+  "sample_rate_hz": 16000,
+  "audio": {
+    "input": {
+      "sample_rate_hz": 16000
+    },
+    "output": {
+      "sample_rate_hz": 24000
+    }
+  },
+  "turn_detection": null,
+  "overlap_policy": "listen_only",
+  "playback_commit_policy": "ack_only",
+  "extra_body": {
+    "auto_response": true,
+    "force_listen_count": 0,
+    "sliding_window_mode": "basic",
+    "basic_window_high_tokens": 8000,
+    "basic_window_low_tokens": 6000
+  }
+}
