@@ -29,15 +29,20 @@
         "backend": "openai-realtime-tts",
         "endpoint": "/v1/realtime",
         "num_prompts": [
-          1
+          1,
+          4,
+          8
         ],
         "max_concurrency": [
-          1
+          1,
+          4,
+          8
         ],
         "no_oversample": true,
         "disable_shuffle": true,
         "trust_remote_code": true,
         "seed_tts_locale": "en",
+        "seed_tts_wer_eval": true,
         "seed_tts_turns_per_session": 4,
         "expected_duplex_audio_turns_per_session": 4,
         "extra_body": {
