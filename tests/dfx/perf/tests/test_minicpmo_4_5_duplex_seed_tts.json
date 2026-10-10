@@ -1,6 +1,7 @@
 [
   {
     "test_name": "test_minicpmo_4_5_duplex_seed_tts",
+    "description": "Temporary loose performance baselines for concurrency 1/4/8; replace with measured per-hardware results after validation. These values are placeholders, not measured performance.",
     "mark": [
       {
         "hardware_marks": {
@@ -29,9 +30,9 @@
         "backend": "openai-realtime-tts",
         "endpoint": "/v1/realtime",
         "num_prompts": [
-          1,
           4,
-          8
+          16,
+          32
         ],
         "max_concurrency": [
           1,
@@ -48,7 +49,75 @@
         "extra_body": {
           "save_duplex_request_metrics": true
         },
-        "percentile-metrics": "ttft,tpot,itl,e2el,audio_ttfp,audio_rtf,audio_duration"
+        "percentile-metrics": "ttft,tpot,itl,e2el,audio_ttfp,audio_rtf,audio_duration",
+        "baseline": {
+          "H100": {
+            "mean_ttft_ms": [
+              60000,
+              60000,
+              60000
+            ],
+            "mean_e2el_ms": [
+              600000,
+              600000,
+              600000
+            ],
+            "mean_audio_ttfp_ms": [
+              60000,
+              60000,
+              60000
+            ],
+            "mean_audio_rtf": [
+              100,
+              100,
+              100
+            ]
+          },
+          "B200": {
+            "mean_ttft_ms": [
+              60000,
+              60000,
+              60000
+            ],
+            "mean_e2el_ms": [
+              600000,
+              600000,
+              600000
+            ],
+            "mean_audio_ttfp_ms": [
+              60000,
+              60000,
+              60000
+            ],
+            "mean_audio_rtf": [
+              100,
+              100,
+              100
+            ]
+          },
+          "A3": {
+            "mean_ttft_ms": [
+              60000,
+              60000,
+              60000
+            ],
+            "mean_e2el_ms": [
+              600000,
+              600000,
+              600000
+            ],
+            "mean_audio_ttfp_ms": [
+              60000,
+              60000,
+              60000
+            ],
+            "mean_audio_rtf": [
+              100,
+              100,
+              100
+            ]
+          }
+        }
       }
     ]
   }
