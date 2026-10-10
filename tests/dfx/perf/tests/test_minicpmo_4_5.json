@@ -173,16 +173,12 @@
         "num_prompts": [
           32,
           64,
-          128,
-          256,
-          512
+          128
         ],
         "max_concurrency": [
           1,
           4,
-          8,
-          16,
-          32
+          8
         ],
         "no_oversample": true,
         "disable_shuffle": true,
