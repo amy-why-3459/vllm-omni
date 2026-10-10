@@ -1,7 +1,7 @@
 [
   {
     "test_name": "test_minicpmo_4_5_duplex_seed_tts",
-    "description": "Temporary loose performance baselines for concurrency 1/4/8; replace with measured per-hardware results after validation. These values are placeholders, not measured performance.",
+    "description": "H100 baselines refreshed from Buildkite build 17017 (2026-10-10, commit c5e0bd7c2c3dd297adfbf36a40f3b7a19bf94d24): each configured metric equals the measured result multiplied by 1.10, rounded to 4 decimals. B200 remains a temporary placeholder pending measurements. A3 baselines refreshed from vllm-omni-npu-ci build 8873 (2026-10-13, commit 26237d470651a841534abbddfb70301580a0227d): each configured metric equals the measured result multiplied by 1.10, rounded to 4 decimals.",
     "mark": [
       {
         "hardware_marks": {
@@ -53,24 +53,24 @@
         "baseline": {
           "H100": {
             "mean_ttft_ms": [
-              60000,
-              60000,
-              60000
+              322.2417,
+              408.3143,
+              668.0144
             ],
             "mean_e2el_ms": [
-              600000,
-              600000,
-              600000
+              19218.0923,
+              19008.5836,
+              18894.4847
             ],
             "mean_audio_ttfp_ms": [
-              60000,
-              60000,
-              60000
+              322.2417,
+              408.3143,
+              668.0144
             ],
             "mean_audio_rtf": [
-              100,
-              100,
-              100
+              1.1491,
+              1.1585,
+              1.2367
             ]
           },
           "B200": {
@@ -97,24 +97,24 @@
           },
           "A3": {
             "mean_ttft_ms": [
-              60000,
-              60000,
-              60000
+              804.4443,
+              611.1337,
+              626.0064
             ],
             "mean_e2el_ms": [
-              600000,
-              600000,
-              600000
+              20488.5406,
+              25724.8852,
+              45008.1518
             ],
             "mean_audio_ttfp_ms": [
-              60000,
-              60000,
-              60000
+              804.4443,
+              611.1337,
+              626.0064
             ],
             "mean_audio_rtf": [
-              100,
-              100,
-              100
+              1.2772,
+              1.7064,
+              3.0622
             ]
           }
         }
