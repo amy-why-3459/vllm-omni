@@ -700,7 +700,7 @@ class _OmniConnectorPayloadTransportMixin(_OmniConnectorRuntimeMixin):
                 # prior chunks (e.g. `model_outputs` carries the full result
                 # so far, not an appendable per-step delta).
                 latest.pop(k, None)
-                if isinstance(v, torch.Tensor) and v.dim() >= 2:
+                if _is_full_payload_row_tensor(k, v):
                     chunks[k] = [v]
                     rows[k] = int(v.shape[0])
                 else:

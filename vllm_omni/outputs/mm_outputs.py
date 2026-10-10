@@ -26,10 +26,9 @@ from vllm_omni.outputs.utils import _is_tensor_list, _to_cpu
 logger = init_logger(__name__)
 
 # Keys whose values are metadata scalars (e.g. audio sample rate or the
-# latest completion flag) but may
-# arrive as 0-d torch.Tensors — from_dict routes all tensors into .tensors,
-# so we relocate them to .metadata before consolidation to avoid a bogus
-# torch.cat attempt and its warn-and-keep-last fallback.
+# latest completion flag) may arrive as 0-d torch.Tensors. from_dict routes
+# all tensors into .tensors, so relocate these keys to .metadata before
+# consolidation to preserve the latest value without attempting torch.cat.
 _METADATA_TENSOR_KEYS: frozenset[str] = frozenset({"sr", "sample_rate", "audio_sample_rate", "meta.finished"})
 
 
