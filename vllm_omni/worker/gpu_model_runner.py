@@ -291,6 +291,10 @@ class OmniGPUModelRunner(PrefixCacheRunnerMixin, GPUModelRunner):
         from vllm.compilation.monitor import set_cudagraph_capturing_enabled
         from vllm.config import set_current_vllm_config
         from vllm.distributed.parallel_state import graph_capture
+        from vllm.platforms import current_platform
+
+        if current_omni_platform.is_npu():
+            from vllm_ascend.worker.model_runner_v1 import graph_capture
 
         manager = self._create_encoder_cudagraph_manager()
         if manager is None:
@@ -302,7 +306,7 @@ class OmniGPUModelRunner(PrefixCacheRunnerMixin, GPUModelRunner):
             with set_current_vllm_config(self.vllm_config), self._freeze_gc(), graph_capture(device=self.device):
                 set_cudagraph_capturing_enabled(True)
                 try:
-                    manager.capture(graph_pool=torch.cuda.graph_pool_handle())
+                    manager.capture(graph_pool=current_platform.graph_pool_handle())
                 finally:
                     set_cudagraph_capturing_enabled(False)
             torch.accelerator.synchronize()
@@ -336,6 +340,12 @@ class OmniGPUModelRunner(PrefixCacheRunnerMixin, GPUModelRunner):
             and supports_encoder_cudagraph(raw_model)
         ):
             return None
+        if self.device.type == "npu":
+            from vllm_omni.platforms.npu.models.qwen3_omni_encoder_graphs import SingleReplayEncoderNpuGraphManager
+
+            return SingleReplayEncoderNpuGraphManager(
+                vllm_config=self.vllm_config, device=self.device, dtype=self.dtype, model=raw_model
+            )
         return SingleReplayEncoderCudaGraphManager(
             vllm_config=self.vllm_config, device=self.device, dtype=self.dtype, model=raw_model
         )

@@ -74,15 +74,17 @@ vllm serve Qwen/Qwen3-Omni-30B-A3B-Instruct --omni --port 8091 \
     "2": {"max_num_seqs": 4}
   }'
 
-# Disable the default CUDA encoder graphs for an eager comparison
+# Disable the default encoder graphs for an eager comparison
 vllm serve Qwen/Qwen3-Omni-30B-A3B-Instruct --omni --port 8091 \
   --stage-overrides '{"0": {"compilation_config": {"cudagraph_mm_encoder": false}}}'
 ```
 
-On CUDA, the default Instruct deployment enables Thinker encoder CUDA graphs
+On CUDA and supported Ascend NPUs (excluding 310P), the default Instruct
+deployment enables Thinker encoder device graphs
 for images, video frames (including DeepStack outputs), and audio. Vision
 captures token budgets of 256, 512, 1024, 2048, 4096, 8192, and 16384, with up to 16
-items and 128 temporal grids per replay. A group that exceeds these limits
+items and 128 temporal grids per replay. NPU uses budgets through 8192 to
+match its stage-0 token budget. A group that exceeds these limits
 runs in one eager call. Override `encoder_cudagraph_token_budgets`,
 `encoder_cudagraph_max_vision_items_per_batch`, and
 `encoder_cudagraph_max_frames_per_batch` in stage 0's `compilation_config`
@@ -97,6 +99,9 @@ rounding at sensitive audio tokens. Clip boundaries and tail gather indices
 remain replay inputs. Shapes outside the capture set and shorter CNN widths
 retain the eager path. Encoder graph outputs own their storage so later
 replays cannot overwrite embeddings cached for an earlier request.
+On NPU, attention sequence boundaries are rebound through Ascend FIA graph
+task updates on every replay; audio shape entries are separate from vision
+budgets. Both towers use NPUGraph, while CUDA retains CUDAGraph.
 Audio-only deployments also capture the audio tower. Explicitly setting
 `cudagraph_mm_encoder: false` disables both audio and vision graphs. Eager
 model configurations and unsupported attention backends retain eager encoders.

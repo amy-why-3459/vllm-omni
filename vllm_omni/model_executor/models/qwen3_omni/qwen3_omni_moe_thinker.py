@@ -131,7 +131,10 @@ from vllm_omni.model_executor.models.qwen2_5_omni.qwen2_5_omni_thinker import (
 from vllm_omni.model_executor.models.qwen3_omni.quantization import (
     Qwen3OmniNestedSupportsQuant,
 )
-from vllm_omni.model_executor.models.qwen3_omni.vision_encoder_cudagraph import Qwen3OmniVisionEncoderCudaGraphMixin
+from vllm_omni.model_executor.models.qwen3_omni.vision_encoder_cudagraph import (
+    Qwen3OmniVisionEncoderCudaGraphMixin,
+    supports_npu_encoder_graphs,
+)
 from vllm_omni.quantization.component_config import (
     PRE_QUANTIZED_METHODS,
     ComponentQuantizationConfig,
@@ -1180,15 +1183,26 @@ class Qwen3OmniMoeThinkerForConditionalGeneration(
         if (
             vllm_config.compilation_config.cudagraph_mm_encoder
             and not getattr(vllm_config.model_config, "enforce_eager", False)
-            and torch.device(vllm_config.device_config.device).type == "cuda"
+            and (
+                torch.device(vllm_config.device_config.device).type == "cuda"
+                or (torch.device(vllm_config.device_config.device).type == "npu" and supports_npu_encoder_graphs())
+            )
             and self.multimodal_config.get_limit_per_prompt("audio") > 0
             and self.multimodal_config.mm_encoder_attn_dtype is None
-            and self.audio_tower.attn_backend in {AttentionBackendEnum.FLASH_ATTN, AttentionBackendEnum.TRITON_ATTN}
+            and (
+                supports_npu_encoder_graphs()
+                or self.audio_tower.attn_backend in {AttentionBackendEnum.FLASH_ATTN, AttentionBackendEnum.TRITON_ATTN}
+            )
             and get_pp_group().is_first_rank
         ):
             from .audio_encoder_cudagraph import Qwen3OmniAudioEncoderCudaGraphs
 
-            self._audio_encoder_graphs = Qwen3OmniAudioEncoderCudaGraphs(self.audio_tower)
+            if supports_npu_encoder_graphs():
+                from vllm_omni.platforms.npu.models.qwen3_omni_encoder_graphs import Qwen3OmniAudioEncoderNpuGraphs
+
+                self._audio_encoder_graphs = Qwen3OmniAudioEncoderNpuGraphs(self.audio_tower)
+            else:
+                self._audio_encoder_graphs = Qwen3OmniAudioEncoderCudaGraphs(self.audio_tower)
 
         with self._mark_language_model(vllm_config):
             lm_vllm_config = vllm_config.with_hf_config(

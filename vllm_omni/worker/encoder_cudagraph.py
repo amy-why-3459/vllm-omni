@@ -32,7 +32,7 @@ class SingleReplayEncoderCudaGraphManager(EncoderCudaGraphManager):
         super().clear()
         audio = getattr(self.model, "_audio_encoder_graphs", None)
         if audio is not None:
-            audio.graphs.clear()
+            audio.clear()
 
     def get_num_graphs_to_capture(self):
         audio = getattr(self.model, "_audio_encoder_graphs", None)
@@ -63,7 +63,7 @@ class SingleReplayEncoderCudaGraphManager(EncoderCudaGraphManager):
             return None
         outputs = super().execute(mm_kwargs)
         if self.graph_hits and (self.graph_hits <= 3 or self.graph_hits % 64 == 0):
-            logger.info("Vision encoder CUDA graphs: hits=%d misses=%d", self.graph_hits, self.graph_misses)
+            logger.info("Vision encoder graphs: hits=%d misses=%d", self.graph_hits, self.graph_misses)
         return outputs
 
 
@@ -86,4 +86,4 @@ class AudioOnlyEncoderCudaGraphManager:
         self.model.capture_audio_encoder_cudagraph(graph_pool)
 
     def clear(self):
-        self.model._audio_encoder_graphs.graphs.clear()
+        self.model._audio_encoder_graphs.clear()

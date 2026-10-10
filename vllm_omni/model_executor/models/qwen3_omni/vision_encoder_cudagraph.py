@@ -16,6 +16,16 @@ from vllm.v1.worker.encoder_cudagraph_defs import (
     EncoderItemSpec,
 )
 
+from vllm_omni.platforms import current_omni_platform
+
+
+def supports_npu_encoder_graphs() -> bool:
+    if not current_omni_platform.is_npu():
+        return False
+    from vllm_omni.platforms.npu._310p import is_310p
+
+    return not is_310p()
+
 
 def _pad_cu_seqlens(dst: torch.Tensor, src: torch.Tensor) -> None:
     # Unused attention sequences must be empty, not run backwards to zero.
@@ -46,12 +56,15 @@ class Qwen3OmniVisionEncoderCudaGraphMixin:
             and not self.multimodal_config.enable_mm_embeds
             and self.multimodal_config.mm_encoder_attn_dtype is None
             and any(self.multimodal_config.get_limit_per_prompt(m) > 0 for m in ("image", "video"))
-            and getattr(self.visual, "attn_backend", None)
-            in {
-                AttentionBackendEnum.FLASH_ATTN,
-                AttentionBackendEnum.ROCM_AITER_FA,
-                AttentionBackendEnum.TRITON_ATTN,
-            }
+            and (
+                (supports_npu_encoder_graphs() and self.visual.device.type == "npu")
+                or getattr(self.visual, "attn_backend", None)
+                in {
+                    AttentionBackendEnum.FLASH_ATTN,
+                    AttentionBackendEnum.ROCM_AITER_FA,
+                    AttentionBackendEnum.TRITON_ATTN,
+                }
+            )
             and get_pp_group().is_first_rank
         ):
             self.supports_encoder_cudagraph = True

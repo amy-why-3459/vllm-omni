@@ -413,6 +413,7 @@ def test_audio_only_runner_captures_and_clears_audio_graphs():
     model = _thinker()
     del model.supports_encoder_cudagraph
     graphs = SimpleNamespace(capture_shapes=((1, 13), (2, 26)), graphs={})
+    graphs.clear = graphs.graphs.clear
     model._audio_encoder_graphs = graphs
     pools = []
 

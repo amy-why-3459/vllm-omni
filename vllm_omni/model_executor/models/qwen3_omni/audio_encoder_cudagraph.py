@@ -3,6 +3,7 @@
 """Audio tower graphs with host-prepared chunk and attention metadata."""
 
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -59,7 +60,7 @@ def audio_forward_prepared(tower, features, indices, cu_seqlens, max_seqlen):
 
 @dataclass
 class AudioGraph:
-    graph: torch.cuda.CUDAGraph
+    graph: Any
     features: torch.Tensor
     indices: torch.Tensor
     cu_seqlens: torch.Tensor
@@ -114,11 +115,23 @@ class Qwen3OmniAudioEncoderCudaGraphs:
             with torch.inference_mode():
                 for _ in range(2):
                     audio_forward_prepared(tower, features, indices, cu, max_seqlen)
-                graph = torch.cuda.CUDAGraph()
-                with torch.cuda.graph(graph, pool=pool):
-                    output = audio_forward_prepared(tower, features, indices, cu, max_seqlen)
+                graph, output = self._capture_graph(
+                    lambda: audio_forward_prepared(tower, features, indices, cu, max_seqlen), pool, (count, tokens)
+                )
             self.graphs[count, tokens] = AudioGraph(graph, features, indices, cu, output)
-        logger.info("Captured %d Qwen3-Omni audio encoder CUDA graphs with exact CNN/token shapes", len(self.graphs))
+        logger.info("Captured %d Qwen3-Omni audio encoder graphs with exact CNN/token shapes", len(self.graphs))
+
+    def clear(self):
+        self.graphs.clear()
+
+    def _capture_graph(self, forward, pool, key):
+        graph = torch.cuda.CUDAGraph()
+        with torch.cuda.graph(graph, pool=pool):
+            output = forward()
+        return graph, output
+
+    def _replay_graph(self, captured, key, boundaries):
+        captured.graph.replay()
 
     def execute(self, input_features, lengths: list[int]):
         if not self.graphs:
@@ -149,7 +162,7 @@ class Qwen3OmniAudioEncoderCudaGraphs:
         captured.cu_seqlens.copy_(
             async_tensor_h2d(torch.tensor(boundaries, dtype=torch.int32), device=input_features.device)
         )
-        captured.graph.replay()
+        self._replay_graph(captured, key, boundaries)
         self.graph_hits += len(lengths)
         if self.graph_hits <= 3 or self.graph_hits % 64 == 0:
             logger.info("Qwen3-Omni audio encoder graphs: hits=%d misses=%d", self.graph_hits, self.graph_misses)
