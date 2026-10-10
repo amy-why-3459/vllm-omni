@@ -1,7 +1,7 @@
 [
   {
     "test_name": "test_minicpmo_4_5",
-    "description": "H100 baseline refreshed 2026-09-29: equal-weight nightly means for 2026-09-22 through 2026-09-28 (7 runs each for C1/P32, C4/P64, C8/P128), rounded to 4 decimals without an added margin. Uses request reference audio after #6628; duplex_seed_tts excluded. A3 unchanged.",
+    "description": "H100 baseline refreshed 2026-09-29: equal-weight nightly means for 2026-09-22 through 2026-09-28 (7 runs each for C1/P32, C4/P64, C8/P128), rounded to 4 decimals without an added margin. Uses request reference audio after #6628; duplex_seed_tts excluded. A3 C1/C4/C8 baselines unchanged. H100/A3 C16/P256 and C32/P512 baselines are temporary loose placeholders, not measured performance; replace after validation.",
     "mark": [
       {
         "hardware_marks": {
@@ -32,12 +32,16 @@
         "num_prompts": [
           32,
           64,
-          128
+          128,
+          256,
+          512
         ],
         "max_concurrency": [
           1,
           4,
-          8
+          8,
+          16,
+          32
         ],
         "no_oversample": true,
         "disable_shuffle": true,
@@ -59,86 +63,77 @@
             "request_throughput": [
               0.9615,
               1.4882,
-              1.6245
+              1.6245,
+              0.001,
+              0.001
             ],
             "mean_ttft_ms": [
               156.5006,
               272.8529,
-              283.2613
+              283.2613,
+              60000,
+              60000
             ],
             "mean_e2el_ms": [
               1042.7617,
               2669.8806,
-              4882.2845
+              4882.2845,
+              600000,
+              600000
             ],
             "mean_audio_ttfp_ms": [
               585.7387,
               1396.1575,
-              2508.4384
+              2508.4384,
+              60000,
+              60000
             ],
             "mean_audio_rtf": [
               0.2504,
               0.6281,
-              1.1787
+              1.1787,
+              100,
+              100
             ]
           },
           "A3": {
             "request_throughput": [
               0.4813,
               0.6381,
-              0.8728
+              0.8728,
+              0.001,
+              0.001
             ],
             "mean_ttft_ms": [
               328.182,
               470.0053,
-              506.3193
+              506.3193,
+              60000,
+              60000
             ],
             "mean_e2el_ms": [
               2086.7028,
               6480.6866,
-              9103.7395
+              9103.7395,
+              600000,
+              600000
             ],
             "mean_audio_ttfp_ms": [
               1023.3301,
               2734.1486,
-              3151.4020
+              3151.4020,
+              60000,
+              60000
             ],
             "mean_audio_rtf": [
               0.4659,
               1.4737,
-              2.1758
+              2.1758,
+              100,
+              100
             ]
           }
         }
-      },
-      {
-        "dataset_name": "seed-tts",
-        "dataset_path": "zhaochenyang20/seed-tts-eval",
-        "backend": "openai-chat-omni",
-        "endpoint": "/v1/chat/completions",
-        "num_prompts": [
-          256,
-          512
-        ],
-        "max_concurrency": [
-          16,
-          32
-        ],
-        "no_oversample": true,
-        "disable_shuffle": true,
-        "trust_remote_code": true,
-        "seed_tts_locale": "en",
-        "extra_body": {
-          "modalities": [
-            "text",
-            "audio"
-          ],
-          "chat_template_kwargs": {
-            "enable_thinking": false,
-            "use_tts_template": true
-          }
-        },
-        "percentile-metrics": "ttft,e2el,audio_ttfp,audio_rtf,audio_duration"
       }
     ]
   },
