@@ -390,3 +390,62 @@ def test_capture_key_mask_cache_is_bounded_and_excludes_dynamic_masks():
     b = _build_capture_mask(attn_mask=caller, offset=0, **args)
     assert a[0, :, 1].all() and not b[0, :, 1].any()
     assert len(cache) == 64
+
+
+@pytest.mark.parametrize("device_type", ["cuda", "npu", "cpu"])
+def test_graph_memory_telemetry_uses_device_allocator(monkeypatch, mocker, device_type):
+    from vllm_omni.model_executor.models.minicpmo_4_5 import cuda_graph_wrapper as graph_module
+
+    device = SimpleNamespace(type=device_type)
+    api = mocker.Mock()
+    api.memory_allocated.return_value = 10
+    api.memory_reserved.return_value = 20
+    api.max_memory_allocated.return_value = 30
+    api.max_memory_reserved.return_value = 40
+    monkeypatch.setattr(torch, "npu", api if device_type == "npu" else mocker.Mock(), raising=False)
+    monkeypatch.setattr(torch, "accelerator", api if device_type == "cuda" else mocker.Mock())
+    if device_type == "cpu":
+        assert graph_module._memory_snapshot(device) is None
+        assert graph_module._memory_peak(device) is None
+        assert not api.mock_calls
+    else:
+        assert graph_module._memory_snapshot(device) == (10, 20)
+        assert graph_module._memory_peak(device) == (30, 40)
+        for name in ("memory_allocated", "memory_reserved", "max_memory_allocated", "max_memory_reserved"):
+            getattr(api, name).assert_called_once_with(device)
+
+
+def test_npu_precapture_stops_after_graph_exceeds_memory_budget(monkeypatch, mocker):
+    from vllm_omni.model_executor.models.minicpmo_4_5 import cuda_graph_wrapper as graph_module
+
+    api = mocker.Mock()
+    api.memory_allocated.return_value = 0
+    api.memory_reserved.side_effect = [0, 2048]
+    monkeypatch.setattr(torch, "npu", api, raising=False)
+    # Keep tensor allocation on CPU; exercise the real NPU telemetry and
+    # precapture stop policy without requiring a device or graph capture.
+    empty = torch.empty
+    monkeypatch.setattr(graph_module.torch, "empty", lambda shape, **kwargs: empty(shape))
+    wrapper = WholeEulerCFMGraphWrapper.__new__(WholeEulerCFMGraphWrapper)
+    wrapper.enabled = True
+    wrapper.att_slots = 0
+    wrapper._att_capacity = 0
+    wrapper.offset_bucket_frames = 50
+    wrapper.query_widths = (50,)
+    wrapper._graph_batches = lambda: [1]
+    wrapper.max_graphs = 10
+    wrapper._cache = {}
+    wrapper._slot_graphs = {}
+    wrapper.device = SimpleNamespace(type="npu")
+    wrapper.dtype = torch.float32
+    wrapper._stats = {"captures": 0}
+    wrapper.arena = mocker.Mock()
+    wrapper.arena.att_bytes.return_value = 0
+
+    def entry(**kwargs):
+        wrapper._stats["captures"] += 1
+        return ()
+
+    wrapper._entry = entry
+    assert wrapper.precapture(offsets=[50, 100, 150], steady=150, channels=4, spk_dim=4, max_graph_bytes=1024) == 1
+    assert api.memory_reserved.call_count == 2

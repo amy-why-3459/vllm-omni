@@ -10,7 +10,7 @@ pytest.importorskip("torch_npu")
 from tests.helpers.mark import hardware_marks
 from vllm_omni.utils.device_copy import index_to_device, to_device_nonblocking
 
-pytestmark = [pytest.mark.core_model, *hardware_marks(res={"npu": "A3"}, num_cards=1)]
+pytestmark = [pytest.mark.core_model, pytest.mark.omni, *hardware_marks(res={"npu": "A3"}, num_cards=1)]
 
 
 @torch.inference_mode()

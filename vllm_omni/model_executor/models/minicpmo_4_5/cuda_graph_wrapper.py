@@ -81,10 +81,11 @@ def _memory_snapshot(device: torch.device) -> tuple[int, int] | None:
     capture out of memory it has already reserved, which is most of the device
     on a normally configured worker.
     """
-    if device.type != "cuda":
+    if device.type not in {"cuda", "npu"}:
         return None
     try:
-        return int(torch.accelerator.memory_allocated(device)), int(torch.accelerator.memory_reserved(device))
+        api = torch.npu if device.type == "npu" else torch.accelerator
+        return int(api.memory_allocated(device)), int(api.memory_reserved(device))
     except Exception:
         return None
 
@@ -97,12 +98,13 @@ def _memory_peak(device: torch.device) -> tuple[int, int] | None:
     they are sampled without synchronizing and are therefore cheap enough for
     capture telemetry.
     """
-    if device.type != "cuda":
+    if device.type not in {"cuda", "npu"}:
         return None
     try:
+        api = torch.npu if device.type == "npu" else torch.accelerator
         return (
-            int(torch.accelerator.max_memory_allocated(device)),
-            int(torch.accelerator.max_memory_reserved(device)),
+            int(api.max_memory_allocated(device)),
+            int(api.max_memory_reserved(device)),
         )
     except Exception:
         return None
