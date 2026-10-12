@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import math
+import os
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any
 
@@ -104,6 +105,36 @@ def _apply_qwen_image21_rotary_emb_native(x: torch.Tensor, freqs: torch.Tensor) 
     x1, x2 = x_pairs.unbind(-1)
     out = torch.stack((x1 * cos - x2 * sin, x1 * sin + x2 * cos), dim=-1)
     return out.flatten(-2).to(x.dtype)
+
+
+def _npu_interleaved_rope_tables(freqs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    """Expand complex half-width freqs into the BSND tables ``npu_rotary_mul`` expects.
+
+    ``freqs`` is ``[S, D/2]`` complex. Interleave mode consumes full-width cos/sin,
+    with each pair's angle repeated on both lanes, shaped ``[1, S, 1, D]``.
+    Tables stay fp32 so the kernel matches the eager path's fp32 rotation.
+    """
+    cos = torch.real(freqs).float().repeat_interleave(2, dim=-1)
+    sin = torch.imag(freqs).float().repeat_interleave(2, dim=-1)
+    return cos.unsqueeze(0).unsqueeze(2), sin.unsqueeze(0).unsqueeze(2)
+
+
+def _apply_qwen_image21_rotary_emb_npu(
+    x: torch.Tensor,
+    rot_cos: torch.Tensor,
+    rot_sin: torch.Tensor,
+) -> torch.Tensor:
+    """Interleaved RoPE through Ascend's fused rotary kernel.
+
+    Atlas A2 ``npu_apply_rotary_pos_emb`` only implements ``rotary_mode='half'``,
+    which is a different pairing from this model's complex pairs, so Q and K
+    each go through ``npu_rotary_mul(..., rotary_mode='interleave')``. The
+    rotation stays in fp32 and is cast back, same contract as the eager fallback.
+    """
+    import torch_npu
+
+    rotated = torch_npu.npu_rotary_mul(x.float(), rot_cos, rot_sin, rotary_mode="interleave")
+    return rotated.to(dtype=x.dtype)
 
 
 def _normalize_qwen_image21_weight_name(name: str) -> str:
@@ -532,8 +563,16 @@ class QwenImage21Attention(nn.Module):
         query = self.norm_q(query).to(value.dtype)
         key = self.norm_k(key).to(value.dtype)
 
-        query = self._apply_rotary_emb(query, freqs)
-        key = self._apply_rotary_emb(key, freqs)
+        if query.device.type == "npu" and os.environ.get("QWEN21_NPU_ROPE", "fused") != "eager":
+            # One table per block, shared by Q and K. Rebuilt every call so a
+            # captured decode graph replays against the current freqs.
+            # QWEN21_NPU_ROPE=eager keeps the fp32 fallback for a same-process A/B.
+            rot_cos, rot_sin = _npu_interleaved_rope_tables(freqs)
+            query = _apply_qwen_image21_rotary_emb_npu(query, rot_cos, rot_sin)
+            key = _apply_qwen_image21_rotary_emb_npu(key, rot_cos, rot_sin)
+        else:
+            query = self._apply_rotary_emb(query, freqs)
+            key = self._apply_rotary_emb(key, freqs)
 
         cached_key = cached_value = None
         if kv_cache is not None:
