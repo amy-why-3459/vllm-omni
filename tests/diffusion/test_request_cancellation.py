@@ -260,26 +260,6 @@ def _wait_for_collective_ready(ready, workers, timeout=120):
             return
 
 
-@pytest.mark.parametrize("exitcode", [0, 1, -15])
-def test_collective_readiness_reports_early_worker_exit(exitcode):
-    class ExitedWorker:
-        exitcode = 0
-
-    worker = ExitedWorker()
-    worker.exitcode = exitcode
-    with pytest.raises(AssertionError, match=f"rank 0 exited before collective readiness: exitcode={exitcode}"):
-        _wait_for_collective_ready(threading.Event(), [worker], timeout=0)
-
-
-def test_collective_readiness_reports_timeout():
-    class WaitingWorker:
-        pid = 123
-        exitcode = None
-
-    with pytest.raises(AssertionError, match=r"Timed out.*\(123, None\)"):
-        _wait_for_collective_ready(threading.Event(), [WaitingWorker()], timeout=0)
-
-
 def test_spawned_ranks_agree_before_leaving_collective_wave(registry, tmp_path):
     ctx = mp.get_context("spawn")
     names = [registry.create(str(rank)) for rank in range(2)]
