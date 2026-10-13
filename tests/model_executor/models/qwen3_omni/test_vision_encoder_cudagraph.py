@@ -156,7 +156,7 @@ def test_real_wrapper_construction_controls_runner_protocol(monkeypatch, stage, 
         assert manager.model is model
         assert manager.config.out_hidden_size == 12
         assert manager.supports_modality("image")
-        assert not manager.supports_modality("video")
+        assert manager.supports_modality("video")
         assert not manager.supports_modality("audio")
 
 
@@ -171,8 +171,11 @@ def test_runner_builds_no_manager_without_multimodal_inputs(monkeypatch):
     assert _runner_factory(model, cfg, supports_mm_inputs=False) is None
 
 
-def test_thinker_construction_enables_the_image_graph(monkeypatch):
+@pytest.mark.parametrize("use_v2,graphs_enabled", [(False, True), (True, False)])
+def test_thinker_construction_enables_the_image_graph(monkeypatch, use_v2, graphs_enabled):
     cfg = _config()
+    cfg.model_config.use_v2_model_runner = use_v2
+    cfg.compilation_config.cudagraph_mm_encoder = graphs_enabled
     cfg.quant_config = None
     thinker_config = cfg.model_config.hf_config.thinker_config
     thinker_config.architectures = ["Qwen3OmniMoeThinkerForConditionalGeneration"]
@@ -197,7 +200,7 @@ def test_image_graph_gate(monkeypatch, change):
     del model.supports_encoder_cudagraph
     mm = model.multimodal_config
     if change == "no_image_limit":
-        mm.get_limit_per_prompt = lambda modality: 0 if modality == "image" else 4
+        mm.get_limit_per_prompt = lambda modality: 0 if modality in {"image", "video"} else 4
     elif change == "sdpa_backend":
         model.visual.attn_backend = AttentionBackendEnum.TORCH_SDPA
     elif change == "fp8_attention":
@@ -301,7 +304,7 @@ def test_budget_range_follows_scheduler_and_model_limits():
     # The shipped deploy's 32768-token batch stops at the replay-profitable cap.
     cfg.scheduler_config.max_num_batched_tokens = 32768
     cfg.model_config.max_model_len = 65536
-    assert model.get_encoder_cudagraph_budget_range(cfg) == (64, 256)
+    assert model.get_encoder_cudagraph_budget_range(cfg) == (64, 4096)
 
 
 @pytest.mark.parametrize("grid", [[2, 2, 2], [1, 3, 2], [1, 2, 0]])
@@ -356,7 +359,7 @@ def _run_encoder_step(monkeypatch, model, manager, batches):
     return [cached[key] for key in keys]
 
 
-def test_actual_runner_dispatch_keeps_video_and_audio_eager(monkeypatch):
+def test_actual_runner_dispatch_replays_video_and_keeps_audio_on_tower_path(monkeypatch):
     model = _thinker()
     manager = _cpu_manager(model)
     eager_modalities = []
@@ -368,12 +371,16 @@ def test_actual_runner_dispatch_keeps_video_and_audio_eager(monkeypatch):
     model.embed_multimodal = embed_multimodal
     image = _images([[1, 2, 2]])
     expected = model.encoder_eager_forward(image)
-    batches = [("image", 1, image), ("video", 1, {"kind": "video"}), ("audio", 1, {"kind": "audio"})]
+    batches = [
+        ("image", 1, image),
+        ("video", 1, {"video_grid_thw": torch.tensor([[2, 2, 2]]), "pixel_values_videos": torch.ones(8, 4)}),
+        ("audio", 1, {"kind": "audio"}),
+    ]
     cached = _run_encoder_step(monkeypatch, model, manager, batches)
-    assert eager_modalities == ["video", "audio"]
+    assert eager_modalities == ["audio"]
     assert len(cached) == 3
     torch.testing.assert_close(cached[0], expected)
-    assert manager.graph_hits == 1
+    assert manager.graph_hits == 2
 
 
 def test_runner_encodes_a_group_beyond_one_replay_in_one_eager_call(monkeypatch):
@@ -392,3 +399,152 @@ def test_runner_encodes_a_group_beyond_one_replay_in_one_eager_call(monkeypatch)
     for output, reference in zip(cached, model.encoder_eager_forward(images).split([2, 3])):
         torch.testing.assert_close(output, reference)
     assert manager.graph_hits == 0 and manager.graph_misses == 2
+
+
+def test_video_frame_capacity_falls_back_before_copying_buffers():
+    model = _thinker()
+    model.vllm_config.compilation_config.encoder_cudagraph_max_frames_per_batch = 2
+    manager = _cpu_manager(model)
+    video = {"video_grid_thw": torch.tensor([[3, 2, 2]]), "pixel_values_videos": torch.ones(12, 4)}
+    assert manager.execute(video) is None
+    assert manager.graph_misses == 1
+
+
+def test_audio_only_runner_captures_and_clears_audio_graphs():
+    from vllm_omni.worker.encoder_cudagraph import AudioOnlyEncoderCudaGraphManager
+
+    model = _thinker()
+    del model.supports_encoder_cudagraph
+    graphs = SimpleNamespace(capture_shapes=((1, 13), (2, 26)), graphs={})
+    graphs.num_graphs_to_capture = lambda: len(graphs.capture_shapes)
+    graphs.clear = graphs.graphs.clear
+    model._audio_encoder_graphs = graphs
+    pools = []
+
+    def capture(pool):
+        pools.append(pool)
+        graphs.graphs.update({1: "captured"})
+
+    graphs.capture = capture
+    manager = _runner_factory(model, model.vllm_config)
+    assert isinstance(manager, AudioOnlyEncoderCudaGraphManager)
+    assert manager.get_num_graphs_to_capture() == 2
+    assert not manager.supports_modality("audio")
+    manager.capture("pool")
+    assert pools == ["pool"] and graphs.graphs
+    manager.clear()
+    assert not graphs.graphs
+    model.vllm_config.compilation_config.cudagraph_mm_encoder = False
+    assert _runner_factory(model, model.vllm_config) is None
+
+
+def test_large_video_capture_uses_spatial_attention_bound():
+    values = (
+        _thinker().prepare_encoder_cudagraph_capture_inputs(8192, 16, 128, torch.device("cpu"), torch.float32).values
+    )
+    assert values["max_seqlen"].item() == 4096
+    assert values["cu_seqlens"].shape == (129,)
+    lengths = values["cu_seqlens"][1:] - values["cu_seqlens"][:-1]
+    assert lengths.max().item() <= 4096
+    assert values["cu_seqlens"][-1].item() == 8192 * 4
+
+
+@pytest.mark.parametrize("audio_only", [False, True])
+def test_mrv2_rejects_encoder_graph_opt_in_before_tower_construction(audio_only):
+    cfg = _config()
+    cfg.model_config.use_v2_model_runner = True
+    if audio_only:
+        cfg.model_config.multimodal_config.get_limit_per_prompt = lambda modality: int(modality == "audio")
+    with pytest.raises(ValueError, match="encoder graphs require model_runner=v1"):
+        Qwen3OmniMoeThinkerForConditionalGeneration(vllm_config=cfg)
+
+
+@pytest.mark.parametrize("graph_result", ["hit", "miss", "disabled"])
+def test_process_audio_input_dispatch(graph_result):
+    calls = []
+
+    class AudioTower(nn.Module):
+        dtype = torch.float32
+
+        def forward(self, features, feature_lens, aftercnn_lens):
+            calls.append("eager")
+            assert features.dtype == self.dtype
+            assert feature_lens.tolist() == [100, 99]
+            return torch.zeros(int(aftercnn_lens.sum()), 4)
+
+    model = _thinker()
+    model.audio_tower = AudioTower()
+    expected = (torch.ones(13, 4), torch.ones(13, 4))
+
+    def execute(features, lengths):
+        calls.append("graph")
+        assert features.dtype == torch.float32
+        assert lengths == [100, 99]
+        return expected if graph_result == "hit" else None
+
+    model._audio_encoder_graphs = None if graph_result == "disabled" else SimpleNamespace(execute=execute)
+    actual = model._process_audio_input(
+        {
+            "input_features": torch.randn(80, 199, dtype=torch.float64),
+            "audio_feature_lengths": torch.tensor([100, 99]),
+        }
+    )
+    if graph_result == "hit":
+        assert actual is expected
+        assert calls == ["graph"]
+    else:
+        assert calls == (["graph", "eager"] if graph_result == "miss" else ["eager"])
+        assert [part.shape for part in actual] == [torch.Size([13, 4]), torch.Size([13, 4])]
+        assert all(torch.count_nonzero(part) == 0 for part in actual)
+
+
+@pytest.mark.parametrize("mode", ["NONE", "FULL"])
+@pytest.mark.parametrize("capture_fails", [False, True])
+def test_real_encoder_profiling_lifecycle(monkeypatch, mode, capture_fails):
+    import vllm.compilation.monitor as monitor
+    import vllm.config as config_module
+    import vllm.distributed.parallel_state as parallel_state
+    from vllm.config import CUDAGraphMode
+    from vllm.platforms import current_platform
+
+    from vllm_omni.platforms import current_omni_platform
+
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    monkeypatch.setattr(current_platform, "graph_pool_handle", lambda: (0, 0))
+    events = []
+
+    def capture(**kwargs):
+        events.append("capture")
+        if capture_fails:
+            raise RuntimeError("capture failed")
+
+    manager = SimpleNamespace(capture=capture, clear=lambda: events.append("clear"))
+
+    def create_manager():
+        events.append("create")
+        return manager
+
+    runner = SimpleNamespace(
+        compilation_config=SimpleNamespace(cudagraph_mode=CUDAGraphMode[mode]),
+        _create_encoder_cudagraph_manager=create_manager,
+        vllm_config=None,
+        _freeze_gc=nullcontext,
+        device=torch.device("cpu"),
+    )
+    monkeypatch.setattr(config_module, "set_current_vllm_config", lambda _: nullcontext())
+    monkeypatch.setattr(parallel_state, "graph_capture", lambda **kwargs: nullcontext())
+    monkeypatch.setattr(monitor, "set_cudagraph_capturing_enabled", lambda flag: events.append(flag))
+    monkeypatch.setattr(torch.accelerator, "synchronize", lambda: None)
+    monkeypatch.setattr(torch.accelerator, "empty_cache", lambda: None)
+    memory = iter([(10, 10), (6, 10)])
+    monkeypatch.setattr(torch.accelerator, "get_memory_info", lambda: next(memory))
+    if mode == "NONE":
+        assert OmniGPUModelRunner.profile_encoder_cudagraph_memory(runner) == 0
+        assert events == []
+    elif capture_fails:
+        with pytest.raises(RuntimeError, match="capture failed"):
+            OmniGPUModelRunner.profile_encoder_cudagraph_memory(runner)
+        assert events == ["create", True, "capture", False, "clear"]
+    else:
+        assert OmniGPUModelRunner.profile_encoder_cudagraph_memory(runner) == 4
+        assert events == ["create", True, "capture", False, "clear"]
