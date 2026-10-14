@@ -210,6 +210,7 @@ def test_cfm_fused_body_default_respects_platform_and_precision(monkeypatch, cud
     from vllm_omni.platforms import current_omni_platform
 
     monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: cuda)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
     monkeypatch.delenv("MINICPMO_CODE2WAV_TF32", raising=False)
     if env is not None:
         monkeypatch.setenv("MINICPMO_CODE2WAV_TF32", env)
@@ -221,6 +222,18 @@ def test_cfm_fused_body_default_respects_platform_and_precision(monkeypatch, cud
     assert model._cfm_graph_config["fused_body"] is expected
     assert model._cfm_graph_config["slot_pool"] is False
     assert model._cfm_graph_config["row_offset_merge"] is False
+
+
+def test_cfm_fused_body_defaults_off_for_npu(monkeypatch):
+    from vllm_omni.platforms import current_omni_platform
+
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: False)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
+    monkeypatch.delenv("MINICPMO_CODE2WAV_TF32", raising=False)
+
+    model = MiniCPMO45Code2Wav(vllm_config=_config())
+
+    assert model._cfm_graph_config["fused_body"] is False
 
 
 @pytest.mark.parametrize(
@@ -2258,3 +2271,32 @@ def test_eager_ragged_euler_reuses_uploaded_lengths():
     assert len(seen) == adapter.n_timesteps
     assert all(lengths is seen[0] for lengths in seen)
     torch.testing.assert_close(seen[0], torch.tensor([3, 1, 3, 1]))
+
+
+def test_estimator_step_preserves_precomputed_time_embedding(monkeypatch):
+    adapter = BatchedToken2Wav(_FakeToken2Wav())
+    supplied = torch.full((2, 1, 1), 19.0)
+    seen = []
+
+    class RecordingGraph:
+        def replay(self, estimator_input, time_embedding, cnn_cache, att_cache, cnn_out, att_out, attn_mask=None):
+            seen.append(time_embedding)
+            return estimator_input[:, :1], cnn_out, att_out
+
+    def unexpected_embedding(*args):
+        raise AssertionError("precomputed embedding must not be recomputed")
+
+    monkeypatch.setattr(adapter, "_time_embedding", unexpected_embedding)
+    adapter._cfm_graph_wrapper = RecordingGraph()
+    adapter._estimator_step(
+        adapter.flow.decoder.estimator,
+        x=torch.ones((2, 1, 2)),
+        mu=torch.ones((2, 1, 2)),
+        time=torch.zeros(2),
+        speakers=torch.ones((2, 1)),
+        cond=torch.zeros((2, 1, 2)),
+        cnn_cache=None,
+        att_cache=None,
+        time_embedding=supplied,
+    )
+    assert seen[0] is supplied
