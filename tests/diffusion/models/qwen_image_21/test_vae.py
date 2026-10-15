@@ -353,3 +353,39 @@ def test_single_frame_paths_match_cached_reference(monkeypatch, path):
     assert caches and all(_num_cached_tensors(cache) > 0 for cache in caches)
     assert ref.shape == out.shape
     assert torch.equal(out, ref)
+
+
+@pytest.mark.parametrize("padding", [0, 1, (1, 2)])
+@pytest.mark.parametrize("stride", [1, 2])
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_causal_conv_matches_explicit_padding(padding, stride, dtype):
+    """Folding spatial padding into Conv2d preserves values and input gradients."""
+    from vllm_omni.diffusion.models.qwen_image_21.autoencoder_kl_qwenimage21 import QwenImage21CausalConv3d
+
+    torch.manual_seed(42)
+    conv = QwenImage21CausalConv3d(4, 8, 3, stride=stride, padding=padding).to(dtype=dtype)
+    x = torch.randn(2, 4, 1, 11, 13, dtype=dtype).transpose(-1, -2).requires_grad_()
+    reference_input = x.detach().clone().requires_grad_()
+    expected = torch.nn.functional.conv2d(
+        torch.nn.functional.pad(reference_input.squeeze(2), conv._padding),
+        conv.weight,
+        conv.bias,
+        stride=conv.stride,
+    ).unsqueeze(2)
+    actual = conv(x)
+    torch.testing.assert_close(actual, expected)
+    actual.sum().backward()
+    expected.sum().backward()
+    torch.testing.assert_close(x.grad, reference_input.grad)
+
+
+def test_causal_conv_preserves_asymmetric_padding():
+    from vllm_omni.diffusion.models.qwen_image_21.autoencoder_kl_qwenimage21 import QwenImage21CausalConv3d
+
+    conv = QwenImage21CausalConv3d(4, 8, 3)
+    conv._padding = (1, 2, 0, 1)
+    x = torch.randn(1, 4, 1, 7, 9)
+    expected = torch.nn.functional.conv2d(
+        torch.nn.functional.pad(x.squeeze(2), conv._padding), conv.weight, conv.bias
+    ).unsqueeze(2)
+    torch.testing.assert_close(conv(x), expected)
