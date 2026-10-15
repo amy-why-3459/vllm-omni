@@ -1923,3 +1923,24 @@ async def test_input_clear_racing_a_queued_append_drops_it_as_the_clients_doing(
         assert h.session.state == DuplexSessionState.OPEN
     finally:
         await close_harness(h)
+
+
+@pytest.mark.asyncio
+async def test_minicpmo_video_only_append_submits_without_commit() -> None:
+    h = await open_harness()
+    try:
+        assert h.session.capabilities.allows_video_without_audio()
+        events = await h.run(
+            commands.AppendAudio(
+                format="pcm_f32le",
+                sample_rate_hz=16000,
+                video_frames=("frame",),
+            )
+        )
+        assert "error" not in types(events)
+        assert len(h.port.submissions) == 1
+        payload = h.port.submissions[0].prompt["model_intermediate_buffer"]["duplex"]["payload"]
+        assert payload["video_frames"] == ["frame"]
+        assert not payload.get("audio")
+    finally:
+        await close_harness(h)
