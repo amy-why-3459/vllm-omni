@@ -150,41 +150,46 @@ def test_original_and_packed_graphs_share_stable_weights():
             torch.testing.assert_close(packed, expected, atol=2e-5, rtol=2e-5)
 
 
-@pytest.mark.parametrize("taps", [1, 3])
-@pytest.mark.parametrize("activation", [None, "mish"])
 @pytest.mark.parametrize("affine", [False, True])
 @torch.inference_mode()
-def test_fused_norm_affine_npugraph_matches_reference(taps, activation, affine):
-    from vllm_omni.model_executor.models.minicpmo_4_5.ops.fused_residual_layer_norm import residual_layer_norm
-    from vllm_omni.platforms.npu.models.minicpmo_fused import residual_layer_norm_npu
+def test_add_layer_norm_npugraph_matches_reference(affine):
+    import torch.nn.functional as F
+
+    from vllm_omni.platforms.npu.models.minicpmo_fused import _add_layer_norm
 
     prepare_code2wav_graph_runtime()
     rows, frames, channels = 2, 6, 32
-    y = torch.randn(rows, frames + taps - 1, taps * channels, device="npu")
-    weight = torch.randn(channels, device="npu") if affine else None
-    bias = torch.randn(channels, device="npu") if affine else None
-    y_bias = torch.randn(channels, device="npu")
-    storage = torch.empty(rows, frames + 2, channels, device="npu")
-    out = storage[:, 2:]
-    residual_out = torch.empty_like(out)
-    kwargs = dict(taps=taps, weight=weight, bias=bias, y_bias=y_bias, activation=activation)
-    residual_layer_norm_npu(None, y, **kwargs, out=out, residual_out=residual_out)
+    x = torch.randn(rows, frames, channels, device="npu")
+    branch = torch.randn(rows, frames, channels, device="npu")
+    weight = torch.randn(channels, device="npu") if affine else torch.ones(channels, device="npu")
+    bias = torch.randn(channels, device="npu") if affine else torch.zeros(channels, device="npu")
+    added_out = torch.empty_like(x)
+    norm_out = torch.empty_like(x)
+
+    def run():
+        added, normalized = _add_layer_norm(x, branch, weight, bias, 1e-6)
+        added_out.copy_(added)
+        norm_out.copy_(normalized)
+
+    run()
     graph = torch.npu.NPUGraph()
     with torch.npu.graph(graph):
-        residual_layer_norm_npu(None, y, **kwargs, out=out, residual_out=residual_out)
+        run()
     for _ in range(2):
-        y.normal_()
-        expected_residual = torch.empty_like(out)
-        expected = residual_layer_norm(None, y, **kwargs, residual_out=expected_residual)
+        x.normal_()
+        branch.normal_()
+        expected_added = x + branch
+        expected_norm = F.layer_norm(expected_added, (channels,), weight, bias, 1e-6)
         graph.replay()
         torch.npu.synchronize()
-        torch.testing.assert_close(out, expected, rtol=2e-5, atol=2e-5)
-        torch.testing.assert_close(residual_out, expected_residual, rtol=0, atol=0)
+        torch.testing.assert_close(added_out, expected_added, rtol=2e-5, atol=2e-5)
+        torch.testing.assert_close(norm_out, expected_norm, rtol=2e-5, atol=2e-5)
 
 
 @torch.inference_mode()
 def test_convolution_graph_storage_survives_fused_body_warmup():
-    from vllm_omni.platforms.npu.models.minicpmo_fused import packed_conv_taps, prepare_estimator
+    from vllm_omni.platforms.npu.models.minicpmo_fused import packed_conv_columns as packed_conv_taps
+    from vllm_omni.platforms.npu.models.minicpmo_fused import prepare_estimator
 
     decoder = pytest.importorskip("cosyvoice2.flow.decoder_dit")
     prepare_code2wav_graph_runtime()

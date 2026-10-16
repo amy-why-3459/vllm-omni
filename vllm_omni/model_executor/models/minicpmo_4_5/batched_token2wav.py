@@ -360,7 +360,6 @@ class BatchedToken2Wav(nn.Module):
         self._token2wav = token2wav
         self._cfm_tf32 = bool(cfm_tf32)
         cfm_graph_cfg = dict(cfm_graph_config or {})
-        self._cfm_fused_cache_update = bool(cfm_graph_cfg.get("fused_cache_update", True))
         # Ragged solves of rows whose caches differ in length (a stream's second chunk next to steady
         # ones): each row keeps its own cache offset, in one slot-pool Whole-Euler replay when it can.
         self._row_offset_merge = bool(cfm_graph_cfg.get("row_offset_merge", False))
@@ -1071,17 +1070,14 @@ class BatchedToken2Wav(nn.Module):
         if slots is not None or (self._ragged_fused_body and estimator_input.dtype == torch.float32):
             # Slot-pool graphs are only built over the fused body (``slot_pool`` above).
             if estimator_input.device.type == "npu":
-                from vllm_omni.platforms.npu.models.minicpmo_fused import blocks_forward_chunk_fused_npu
+                from vllm_omni.platforms.npu.models.minicpmo_fused import (
+                    blocks_forward_chunk_fused_npu,
+                    fused_body_accepts,
+                )
 
-                try:
-                    return blocks_forward_chunk_fused_npu(
-                        *args, modulation=modulation, slots=slots, fuse_cache_update=self._cfm_fused_cache_update
-                    )
-                except RuntimeError as exc:
-                    if "mask does not match the captured cache layout" not in str(exc):
-                        raise
-                    logger.debug("NPU fused CFM body falling back for incompatible cache mask")
-                    return self._blocks_forward_chunk_ragged(*args, modulation=modulation)
+                if fused_body_accepts(args[3], args[7]):
+                    return blocks_forward_chunk_fused_npu(*args, modulation=modulation, slots=slots)
+                return self._blocks_forward_chunk_ragged(*args, modulation=modulation)
             return blocks_forward_chunk_fused(*args, modulation=modulation, slots=slots)
         if modulation is not None:
             return self._blocks_forward_chunk_ragged(*args, modulation=modulation)

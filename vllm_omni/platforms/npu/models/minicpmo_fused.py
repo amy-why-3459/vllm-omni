@@ -2,23 +2,42 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Inference-only MiniCPM DiT projections and attention on Ascend."""
 
+from typing import cast
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from vllm_omni.model_executor.models.minicpmo_4_5.dit_fused import blocks_forward_chunk_fused, supports_fused_body
-from vllm_omni.model_executor.models.minicpmo_4_5.ops.fused_residual_layer_norm import residual_layer_norm
+from vllm_omni.model_executor.models.minicpmo_4_5.dit_fused import (
+    _GATE_CONV,
+    _GATE_MLP,
+    _GATE_MSA,
+    _SCALE_CONV,
+    _SCALE_MLP,
+    _SCALE_MSA,
+    _SHIFT_CONV,
+    _SHIFT_MLP,
+    _SHIFT_MSA,
+    _mlp,
+    causal_cache_index,
+    dit_modulation,
+    gather_causal_cache,
+    supports_fused_body,
+)
 
 from .cosyvoice2_dit_attn import _expand_attn_mask_for_npu
-from .minicpmo_causal_cache import write_cache
 
 
 def supports_packed_qkv(attn: nn.Module) -> bool:
-    projections = [getattr(attn, name, None) for name in ("to_q", "to_k", "to_v")]
-    return (
-        all(type(p) is nn.Linear for p in projections)
-        and all(p.weight.shape == projections[0].weight.shape for p in projections)
-        and (all(p.bias is None for p in projections) or all(p.bias is not None for p in projections))
+    projections: list[nn.Linear] = []
+    for name in ("to_q", "to_k", "to_v"):
+        projection = getattr(attn, name, None)
+        if type(projection) is not nn.Linear:
+            return False
+        projections.append(cast(nn.Linear, projection))
+    reference = projections[0]
+    return all(p.weight.shape == reference.weight.shape for p in projections) and (
+        all(p.bias is None for p in projections) or all(p.bias is not None for p in projections)
     )
 
 
@@ -43,7 +62,7 @@ def prepare_estimator(estimator: nn.Module, *, pack_convs: bool = False) -> None
         if pack_convs:
             for conv in (block.conv.block[1], block.conv.block[6]):
                 if not conv.training and conv.weight.device.type == "npu" and conv.weight.dtype == torch.float32:
-                    packed_conv_taps(conv)
+                    packed_conv_columns(conv)
 
 
 def packed_qkv(attn: nn.Module) -> tuple[torch.Tensor, torch.Tensor | None]:
@@ -107,184 +126,102 @@ def attention(attn, x, att_cache, attn_mask, kv, *, min_cache_frames: int):
     return attn.proj(out.transpose(1, 2).reshape(batch, frames, -1))
 
 
-def packed_conv_taps(conv: nn.Conv1d) -> torch.Tensor:
-    """Pack taps without a version counter, retaining weight loads as views.
+def packed_conv_columns(conv: nn.Conv1d) -> torch.Tensor:
+    """``(C_out, K * C_in)`` weight for frames-major im2col columns ``[k * C_in + c]``.
 
-    Like packed_qkv, in-place loads update the pack and replacing/moving a
-    Parameter rebuilds it. Inference tensors have no version counter. Graphs
-    must be recaptured after weight reloads, as with the rest of the body.
+    The Parameter is retained as a view of the pack, so in-place loads update
+    it, and replacing/moving a Parameter rebuilds it. Inference tensors have
+    no version counter. Graphs must be recaptured after weight reloads, as
+    with the rest of the body.
     """
-    shape = (conv.kernel_size[0], conv.out_channels, conv.in_channels)
-    packed = conv.__dict__.get("_npu_packed_conv_taps")
-    if packed is not None and _same_view(conv.weight, packed.view(shape).permute(1, 2, 0)):
+    shape = (conv.out_channels, conv.kernel_size[0], conv.in_channels)
+    packed = conv.__dict__.get("_npu_packed_conv_columns")
+    if packed is not None and _same_view(conv.weight, packed.view(shape).permute(0, 2, 1)):
         return packed
     if conv.weight.device.type == "npu" and torch.npu.is_current_stream_capturing():
         raise RuntimeError("MiniCPM NPU convolution weights must be packed during warmup, before graph capture")
     with torch.no_grad():
-        packed = conv.weight.detach().permute(2, 0, 1).reshape(-1, conv.in_channels).contiguous()
-        conv.weight.data = packed.view(shape).permute(1, 2, 0)
-    conv.__dict__["_npu_packed_conv_taps"] = packed
+        packed = conv.weight.detach().permute(0, 2, 1).reshape(conv.out_channels, -1).contiguous()
+        conv.weight.data = packed.view(shape).permute(0, 2, 1)
+    conv.__dict__["_npu_packed_conv_columns"] = packed
     return packed
+
+
+def _norm_affine(norm: nn.LayerNorm, like: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    weight, bias = norm.weight, norm.bias
+    if weight is not None and bias is not None:
+        return weight, bias
+    cached = norm.__dict__.get("_npu_norm_affine")
+    if cached is None or cached[0].device != like.device or cached[0].dtype != like.dtype:
+        cached = (like.new_ones(like.shape[-1]), like.new_zeros(like.shape[-1]))
+        norm.__dict__["_npu_norm_affine"] = cached
+    return (cached[0] if weight is None else weight), (cached[1] if bias is None else bias)
+
+
+def _add_layer_norm_op(x: torch.Tensor):
+    """ACLNN ``npu_add_layer_norm`` when it can run on this tensor, else ``None`` for the native fallback."""
+    if x.device.type != "npu":
+        return None
+    try:
+        import torch_npu
+    except ImportError:
+        return None
+    return getattr(torch_npu, "npu_add_layer_norm", None)
 
 
 def gated_residual_norm(x, gate, branch, norm):
     """Return both the residual stream and its normalization with ACLNN AddLayerNorm."""
-    import torch_npu
-
-    op = getattr(torch_npu, "npu_add_layer_norm", None)
+    op = _add_layer_norm_op(x)
     if op is None:
         residual = torch.addcmul(x, gate, branch)
         return residual, norm(residual)
-    weight, bias = norm.weight, norm.bias
-    if weight is None or bias is None:
-        cached = norm.__dict__.get("_npu_norm_affine")
-        if cached is None or cached[0].device != x.device or cached[0].dtype != x.dtype:
-            cached = (x.new_ones(x.shape[-1]), x.new_zeros(x.shape[-1]))
-            norm.__dict__["_npu_norm_affine"] = cached
-        weight = cached[0] if weight is None else weight
-        bias = cached[1] if bias is None else bias
+    weight, bias = _norm_affine(norm, x)
     normalized, _, _, residual = op(x, gate * branch, weight, bias, epsilon=norm.eps, additional_output=True)
     return residual, normalized
 
 
-def _ones_zeros(like: torch.Tensor, channels: int) -> tuple[torch.Tensor, torch.Tensor]:
-    cached = _ones_zeros.__dict__.get("_cache")
-    if cached is None:
-        cached = {}
-        _ones_zeros.__dict__["_cache"] = cached
-    key = (like.device, like.dtype, channels)
-    affine = cached.get(key)
-    if affine is None:
-        affine = (like.new_ones(channels), like.new_zeros(channels))
-        cached[key] = affine
-    return affine
+def _add_layer_norm(x, branch, weight, bias, eps):
+    """``(x + branch, LayerNorm(x + branch) * weight + bias)`` in one ACLNN AddLayerNorm."""
+    op = _add_layer_norm_op(x)
+    if op is None:
+        added = x + branch
+        return added, F.layer_norm(added, (int(added.shape[-1]),), weight, bias, eps)
+    normalized, _, _, added = op(x, branch, weight, bias, epsilon=float(eps), additional_output=True)
+    return added, normalized
 
 
-def _tap_sum(y: torch.Tensor, taps: int, frames: int, channels: int) -> torch.Tensor:
-    """Sum causal conv taps. Contiguous activations reduce in one kernel."""
-    if taps == 1:
-        return y[:, :frames, :channels]
-    if (
-        y.is_contiguous()
-        and y.stride(-1) == 1
-        and int(y.shape[1]) >= frames + taps - 1
-        and int(y.shape[2]) >= taps * channels
-    ):
-        # y[n, t + k, k * C + c] has tap stride stride(time) + C.
-        shifted = y.as_strided(
-            (int(y.shape[0]), frames, taps, channels),
-            (int(y.stride(0)), int(y.stride(1)), int(y.stride(1)) + channels, 1),
-        )
-        return shifted.sum(dim=2)
-    value = y[:, :frames, :channels]
-    for k in range(1, taps):
-        value = value + y[:, k : k + frames, k * channels : (k + 1) * channels]
-    return value
+def _causal_conv(conv: nn.Conv1d, history: torch.Tensor, frames: int) -> torch.Tensor:
+    """``conv`` over contiguous frames-major ``history`` (N, W + T, C_in): one im2col copy, one biased GEMM."""
+    rows, _, channels = history.shape
+    taps = int(conv.kernel_size[0])
+    columns = history.as_strided((rows, frames, taps * channels), (int(history.stride(0)), channels, 1))
+    out = F.linear(columns.reshape(rows * frames, taps * channels), packed_conv_columns(conv), conv.bias)
+    return out.view(rows, frames, -1)
 
 
-def _apply_gate_bias(branch: torch.Tensor, gate: torch.Tensor | None, y_bias: torch.Tensor | None) -> torch.Tensor:
-    """``gate * (branch + bias)`` with one elementwise kernel on the activation."""
-    if gate is not None and y_bias is not None:
-        return torch.addcmul(gate * y_bias, branch, gate)
-    if y_bias is not None:
-        return branch + y_bias
-    if gate is not None:
-        return gate * branch
-    return branch
+def _frames_major_cache(cnn_cache, width: int):
+    """All blocks' ``(N, C, W)`` caches as one contiguous ``(depth, N, W, C)`` tensor: one transpose per body."""
+    if width <= 0:
+        return None
+    if not isinstance(cnn_cache, torch.Tensor):
+        caches = list(cnn_cache)
+        if all(cache is None for cache in caches):
+            return None
+        if any(cache is None for cache in caches):
+            raise ValueError("NPU fused body needs either every block's CNN cache or none")
+        if any(cache.shape != caches[0].shape for cache in caches):
+            return [cache.transpose(1, 2) for cache in caches]
+        cnn_cache = torch.stack(caches)
+    return cnn_cache.transpose(-1, -2).contiguous()
 
 
-def residual_layer_norm_npu(
-    residual: torch.Tensor | None,
-    y: torch.Tensor | None = None,
-    *,
-    gate: torch.Tensor | None = None,
-    weight: torch.Tensor | None = None,
-    bias: torch.Tensor | None = None,
-    eps: float = 1e-6,
-    taps: int = 1,
-    y_bias: torch.Tensor | None = None,
-    activation: str | None = None,
-    residual_out: torch.Tensor | None = None,
-    out: torch.Tensor | None = None,
-) -> torch.Tensor:
-    """``residual_layer_norm`` with ACLNN AddLayerNorm for residual + gate * y.
-
-    Tap reduction, conv bias and Mish stay outside the op. Anything the op
-    cannot express falls back to the shared implementation.
-    """
-    reference = residual if residual is not None else y
-    if (
-        reference is not None
-        and reference.device.type == "npu"
-        and reference.dtype == torch.float32
-        and not torch.is_grad_enabled()
-        and (residual is None or y is None)
-        and activation in (None, "mish")
-    ):
-        # ACLNN LayerNorm accepts affine parameters directly. The shared
-        # native fallback launches separate scale, shift and output copies.
-        if y is None:
-            value = residual
-        else:
-            frames = int(y.shape[1]) - (taps - 1)
-            channels = int(y.shape[2]) // taps
-            value = _apply_gate_bias(_tap_sum(y, taps, frames, channels), gate, y_bias)
-        if residual_out is not None:
-            residual_out.copy_(value)
-        result = F.layer_norm(value, (int(value.shape[-1]),), weight, bias, eps)
-        if activation == "mish":
-            result = F.mish(result)
-        if out is not None:
-            out.copy_(result)
-            return out
-        return result
-    fused = None
-    if (
-        activation is None
-        and residual is not None
-        and y is not None
-        and reference is not None
-        and reference.device.type == "npu"
-        and reference.dtype == torch.float32
-        and not torch.is_grad_enabled()
-    ):
-        try:
-            import torch_npu
-        except ImportError:
-            torch_npu = None
-        op = getattr(torch_npu, "npu_add_layer_norm", None) if torch_npu is not None else None
-        if op is not None:
-            frames, channels = int(residual.shape[1]), int(residual.shape[2])
-            branch = _apply_gate_bias(_tap_sum(y, taps, frames, channels), gate, y_bias)
-            gamma, beta = weight, bias
-            if gamma is None or beta is None:
-                ones, zeros = _ones_zeros(residual, channels)
-                gamma = ones if gamma is None else gamma
-                beta = zeros if beta is None else beta
-            normalized, _, _, added = op(
-                residual[:, :frames], branch, gamma, beta, epsilon=float(eps), additional_output=True
-            )
-            if residual_out is not None:
-                residual_out[:, :frames].copy_(added)
-            fused = normalized
-    if fused is None:
-        return residual_layer_norm(
-            residual,
-            y,
-            gate=gate,
-            weight=weight,
-            bias=bias,
-            eps=eps,
-            taps=taps,
-            y_bias=y_bias,
-            activation=activation,
-            residual_out=residual_out,
-            out=out,
-        )
-    if out is None:
-        return fused
-    out.copy_(fused)
-    return out
+def _attach_history(old: torch.Tensor | None, current: torch.Tensor, width: int) -> torch.Tensor:
+    """``(N, W + T, C)`` from frames-major cached frames and the current ones."""
+    if width <= 0:
+        return current
+    if old is None:
+        return F.pad(current, (0, 0, width, 0))
+    return torch.cat((old, current), dim=1)
 
 
 def attention_npu(attn, hidden, att_cache, attn_mask, kv, slots=None):
@@ -339,6 +276,11 @@ def attention_npu(attn, hidden, att_cache, attn_mask, kv, slots=None):
     return F.linear(out, attn.proj.weight, attn.proj.bias).view(batch, frames, -1)
 
 
+def fused_body_accepts(attn_mask: torch.Tensor | None, att_cache_buffer: torch.Tensor) -> bool:
+    """Whether the key mask describes the same sequence as the static output cache (Whole-Euler layout)."""
+    return attn_mask is None or int(attn_mask.shape[-1]) == int(att_cache_buffer.shape[-2])
+
+
 def blocks_forward_chunk_fused_npu(
     estimator: nn.Module,
     estimator_input: torch.Tensor,
@@ -351,31 +293,97 @@ def blocks_forward_chunk_fused_npu(
     valid_lengths,
     modulation: torch.Tensor | None = None,
     slots: tuple[torch.Tensor, torch.Tensor] | None = None,
-    *,
-    fuse_cache_update: bool = True,
 ) -> torch.Tensor:
-    """NPU DiT body: the CUDA fused schedule with AddLayerNorm and packed QKV."""
+    """``BatchedToken2Wav._blocks_forward_chunk_ragged`` scheduled for Ascend.
+
+    The CUDA fused body's math with AddLayerNorm residual updates, packed QKV,
+    im2col convolutions with biased GEMMs, and frames-major CNN caches that are
+    transposed once per body instead of per block.
+    """
     if slots is not None:
         raise RuntimeError("MiniCPM NPU fused body does not support the CFM attention slot pool")
-    if attn_mask is not None and int(attn_mask.shape[-1]) != int(att_cache_buffer.shape[-2]):
-        # Whole-Euler's static output cache and key mask must describe the
-        # same captured sequence; otherwise keep the ragged eager path.
+    if not fused_body_accepts(attn_mask, att_cache_buffer):
         raise RuntimeError("NPU fused body mask does not match the captured cache layout")
-    return blocks_forward_chunk_fused(
-        estimator,
-        estimator_input,
-        time_embedding,
-        attn_mask,
-        cnn_cache,
-        att_cache,
-        cnn_cache_buffer,
-        att_cache_buffer,
-        valid_lengths,
-        modulation=modulation,
-        slots=None,
-        norm=residual_layer_norm_npu,
-        attend=attention_npu,
-        conv_weight=packed_conv_taps,
-        defer_conv_history=True,
-        write_cache=write_cache if fuse_cache_update else None,
+    if isinstance(valid_lengths, torch.Tensor):
+        lengths = valid_lengths
+    else:
+        lengths = torch.tensor((*valid_lengths, *valid_lengths), device=estimator_input.device, dtype=torch.long)
+    if modulation is None:
+        modulation = dit_modulation(estimator, time_embedding[:1])
+    blocks = estimator.blocks
+    depth = len(blocks)
+    conv1, conv2 = blocks[0].conv.block[1], blocks[0].conv.block[6]
+    width = int(conv1.kernel_size[0]) - 1
+    split = conv1.in_channels
+
+    x = estimator.in_proj(estimator_input.transpose(1, 2))
+    rows, frames, channels = x.shape
+    old = _frames_major_cache(cnn_cache, width)
+    # Both histories' causal caches land frames-major in one staging tensor;
+    # a single transpose at the end writes the caller's (N, C, W) layout.
+    staged = (
+        width > 0
+        and isinstance(cnn_cache_buffer, torch.Tensor)
+        and conv1.in_channels == conv2.in_channels
+        and all(b.conv.block[1].kernel_size == b.conv.block[6].kernel_size == conv1.kernel_size for b in blocks)
     )
+    if staged:
+        staging = x.new_empty((depth, 2, rows * width, split))
+        offsets = torch.arange(rows, device=x.device, dtype=lengths.dtype) * (width + frames)
+        rows_index = (offsets + lengths)[:, None] + torch.arange(width, device=x.device, dtype=lengths.dtype)
+        rows_index = rows_index.reshape(-1)
+    cache_index: dict[int, torch.Tensor] = {}
+
+    first = modulation[0]
+    hidden = F.layer_norm(x, (channels,), first[_SCALE_MSA], first[_SHIFT_MSA], blocks[0].norm1.eps)
+    for block_index, block in enumerate(blocks):
+        mod = modulation[block_index]
+        x_att = attention_npu(block.attn, hidden, att_cache[block_index], attn_mask, att_cache_buffer[block_index])
+
+        # CausalConvBlock: [conv1, LayerNorm, Mish, conv2] over (N, W + T, C) histories.
+        conv_layers = block.conv.block
+        conv1, conv_norm, conv2 = conv_layers[1], conv_layers[3], conv_layers[6]
+        block_width = int(conv1.kernel_size[0]) - 1
+        old1 = None if old is None else old[block_index][..., : conv1.in_channels]
+        old2 = None if old is None else old[block_index][..., conv1.in_channels :]
+        x, conv_in = _add_layer_norm(x, mod[_GATE_MSA] * x_att, mod[_SCALE_CONV], mod[_SHIFT_CONV], block.norm3.eps)
+        history = _attach_history(old1, conv_in, block_width)
+        conv_hidden = _causal_conv(conv1, history, frames)
+        conv_weight, conv_bias = _norm_affine(conv_norm, conv_hidden)
+        conv_hidden = F.mish(
+            F.layer_norm(conv_hidden, (int(conv_hidden.shape[-1]),), conv_weight, conv_bias, conv_norm.eps)
+        )
+        history2 = _attach_history(old2, conv_hidden, block_width)
+        x, mlp_in = _add_layer_norm(
+            x,
+            mod[_GATE_CONV] * _causal_conv(conv2, history2, frames),
+            mod[_SCALE_MLP],
+            mod[_SHIFT_MLP],
+            block.norm2.eps,
+        )
+        mlp_out = _mlp(block.mlp, mlp_in)
+        # Table row ``depth`` holds the final layer's shift and 1 + scale where a block keeps its MSA pair.
+        last = block_index + 1 == depth
+        x, hidden = _add_layer_norm(
+            x,
+            mod[_GATE_MLP] * mlp_out,
+            modulation[block_index + 1][_SCALE_MSA],
+            modulation[block_index + 1][_SHIFT_MSA],
+            estimator.final_layer.norm_final.eps if last else blocks[block_index + 1].norm1.eps,
+        )
+
+        if staged:
+            torch.index_select(history.view(-1, split), 0, rows_index, out=staging[block_index, 0])
+            torch.index_select(history2.view(-1, split), 0, rows_index, out=staging[block_index, 1])
+        else:
+            if block_width not in cache_index:
+                cache_index[block_width] = causal_cache_index(lengths, block_width)
+            cnn_out = cnn_cache_buffer[block_index]
+            cnn_out[:, : conv1.in_channels].copy_(gather_causal_cache(history, cache_index[block_width]))
+            cnn_out[:, conv1.in_channels :].copy_(gather_causal_cache(history2, cache_index[block_width]))
+
+    if staged:
+        cnn_cache_buffer.unflatten(2, (2, split)).copy_(
+            staging.view(depth, 2, rows, width, split).permute(0, 2, 1, 4, 3)
+        )
+    return estimator.final_layer.linear(hidden).transpose(1, 2)

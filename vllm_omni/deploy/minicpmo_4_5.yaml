@@ -35,8 +35,9 @@ connectors:
       hift_graph_continuation_frames: [4, 28]
       hift_graph_exact_batch_sizes: [1]
       enable_cfm_graph: true
-      # CUDA enables its TF32 fused body by default. NPU fused body remains
-      # opt-in: NPUGraph parity alone does not validate full-checkpoint audio quality.
+      # Fused CFM DiT body: CUDA via TF32, NPU via packed QKV + ACLNN
+      # AddLayerNorm + im2col-GEMM convolutions and a single cache transpose.
+      cfm_fused_body: true
       # Small exact encoder batches share one startup arena; larger batches
       # replay in groups, preserving cache lengths without batch padding.
       enable_code2wav_encoder_graph: true

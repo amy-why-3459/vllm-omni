@@ -21,10 +21,11 @@ Duplex defaults to the V1 session path; `minicpmo_4_5_duplex_mrv2.yaml` is the
 opt-in CUDA overlay that runs all three duplex stages on MRv2. Turn results do
 not establish duplex performance or interruption correctness.
 
-The shared Code2Wav backend defaults to the existing fused CFM body on CUDA
-when TF32 is allowed, subject to architecture and FP32 attention-cache
-eligibility. Set `cfm_fused_body: false` in the stage connector extra to restore
-the original body. Disabling `token2wav_allow_tf32` or setting
+The shared Code2Wav backend defaults to the fused CFM body on both CUDA and
+NPU, subject to architecture and FP32 attention-cache eligibility. CUDA also
+requires TF32 to be allowed; NPU fusion is independent of TF32. Set
+`cfm_fused_body: false` in the stage connector extra to restore the original
+body. On CUDA, disabling `token2wav_allow_tf32` or setting
 `MINICPMO_CODE2WAV_TF32=off` also disables the default fusion choice; an explicit
 `cfm_fused_body` setting takes precedence. Startup precapture includes query
 buckets for final chunks with encoder lookahead, after steady-state buckets
@@ -41,12 +42,13 @@ The shared asynchronous output snapshot and batched Talker preprocessing also
 apply to V1 when async chunking/scheduling is enabled. Default V1 behavior must
 therefore be included in end-to-end regression validation.
 
-CFM graph execution defaults to the fused DiT body on CUDA when TF32 is
-allowed. NVIDIA SM80+ uses tiled TF32 attention; older CUDA devices use the
-fused body's SDPA fallback. Unsupported DiT layouts or non-FP32 attention
+CFM graph execution defaults to the fused DiT body on CUDA (when TF32 is
+allowed) and on NPU. NVIDIA SM80+ uses tiled TF32 attention; older CUDA devices
+use the fused body's SDPA fallback. NPU uses packed QKV, in-place KV and ACLNN
+AddLayerNorm, independent of TF32. Unsupported DiT layouts or non-FP32 attention
 caches retain the original body. Other platforms retain their existing default.
 Set `cfm_fused_body: false` in connector `extra` to restore the original body.
-Disabling TF32 with `token2wav_allow_tf32: false` or
+On CUDA, disabling TF32 with `token2wav_allow_tf32: false` or
 `MINICPMO_CODE2WAV_TF32=off` also disables the default fusion choice; an explicit
 `cfm_fused_body: true` overrides that choice and may use TF32 attention.
 Slot pooling and row-offset merging remain opt-in. Fusion changes floating-point
@@ -106,16 +108,17 @@ lifecycle test proves host cleanup across replay; it does not establish
 Llama attention/KV correctness or a full-model speedup. Measure performance
 without stack profiling and verify FULL replay separately from compile logs.
 
-## NPU CFM convolution cache updates
+## NPU CFM DiT body schedule
 
-For the NPU fused DiT body, `cfm_fused_cache_update` (connector extra, default
-`true`) gathers both convolution histories directly into the caller-owned
-CNN cache in one Triton kernel per block. It preserves the existing `(N, C, W)`
-cache layout and uses device valid lengths on every replay, including zero
-lengths and ragged tails. History concatenation stays on the native path;
-fusing that larger copy regressed measured long-block performance. Set the
-option to `false` before graph capture for a native gather/transpose/copy
-comparison. CUDA and the unfused DiT body are unaffected.
+The NPU fused DiT body (`cfm_fused_body`) runs the CUDA body's math on Ascend
+graph-friendly kernels: packed QKV, `npu_add_layer_norm` for every modulated
+residual + LayerNorm, and causal convolutions as one im2col GEMM over the
+contiguous frames-major history (`[k * C_in + c]` columns). Both convolution
+histories' causal caches are gathered with `index_select` into one frames-major
+staging tensor and written to the caller's `(N, C, W)` cache in a single
+transpose per body, instead of a per-block gather/transpose/copy or a per-block
+Triton kernel. The whole-block CNN cache is transposed to frames-major once per
+body rather than per block. CUDA and the unfused DiT body are unaffected.
 
 ## Reference prefetch at higher concurrency
 

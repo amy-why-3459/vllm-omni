@@ -7,15 +7,14 @@ import torch
 import torch.nn as nn
 
 from vllm_omni.model_executor.models.minicpmo_4_5.dit_fused import (
-    _attach_conv_history,
     blocks_forward_chunk_fused,
     supports_fused_body,
 )
 from vllm_omni.platforms.npu.models.minicpmo_fused import (
-    _apply_gate_bias,
-    _tap_sum,
+    _attach_history,
+    _causal_conv,
     blocks_forward_chunk_fused_npu,
-    packed_conv_taps,
+    packed_conv_columns,
 )
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
@@ -116,47 +115,40 @@ def test_npu_fused_body_accepts_inference_parameters():
 
 
 @pytest.mark.parametrize("inference", [False, True])
-def test_packed_conv_taps_tracks_in_place_and_replaced_weights(inference):
+def test_packed_conv_columns_tracks_in_place_and_replaced_weights(inference):
     with torch.inference_mode(inference), torch.no_grad():
         conv = nn.Conv1d(8, 12, 3)
-        x = torch.randn(2, 8, 9)
-        expected = conv(x)
-        packed = packed_conv_taps(conv)
-        torch.testing.assert_close(conv(x), expected)
+        columns = conv.weight.permute(0, 2, 1).reshape(12, 24)
+        packed = packed_conv_columns(conv)
+        torch.testing.assert_close(packed, columns)
         conv.weight.add_(0.25)
-        assert packed_conv_taps(conv) is packed
-        torch.testing.assert_close(packed, conv.weight.permute(2, 0, 1).reshape(36, 8))
+        assert packed_conv_columns(conv) is packed
+        torch.testing.assert_close(packed, conv.weight.permute(0, 2, 1).reshape(12, 24))
         conv.weight = nn.Parameter(torch.randn_like(conv.weight))
-        replacement = packed_conv_taps(conv)
+        replacement = packed_conv_columns(conv)
         assert replacement is not packed
-        torch.testing.assert_close(replacement, conv.weight.permute(2, 0, 1).reshape(36, 8))
+        torch.testing.assert_close(replacement, conv.weight.permute(0, 2, 1).reshape(12, 24))
 
 
-def test_tap_sum_and_gated_branch_match_reference() -> None:
+def test_causal_conv_matches_conv1d() -> None:
     torch.manual_seed(2)
-    frames, taps, channels = 5, 3, 4
-    y = torch.randn(2, frames + taps - 1, taps * channels)
-    got = _tap_sum(y, taps, frames, channels)
-    want = sum(y[:, k : k + frames, k * channels : (k + 1) * channels] for k in range(taps))
-    torch.testing.assert_close(got, want)
-    branch = torch.randn(2, frames, channels)
-    gate = torch.randn(channels)
-    bias = torch.randn(channels)
-    torch.testing.assert_close(_apply_gate_bias(branch, gate, bias), gate * (branch + bias))
-    torch.testing.assert_close(_apply_gate_bias(branch, None, bias), branch + bias)
-    torch.testing.assert_close(_apply_gate_bias(branch, gate, None), gate * branch)
+    rows, frames, width, channels = 2, 5, 2, 8
+    conv = nn.Conv1d(channels, channels, width + 1).eval()
+    history = torch.randn(rows, width + frames, channels)
+    with torch.no_grad():
+        got = _causal_conv(conv, history, frames)
+        want = conv(history.transpose(1, 2)).transpose(1, 2)
+    torch.testing.assert_close(got, want, rtol=1e-5, atol=1e-5)
 
 
-def test_attach_conv_history_matches_buffer_fill() -> None:
+def test_attach_history_matches_buffer_fill() -> None:
     current = torch.randn(2, 5, 4)
-    cache = torch.randn(2, 4, 2)
-    attached = _attach_conv_history(cache, current, 2)
-    buffered = torch.empty(2, 7, 4)
-    buffered[:, :2].copy_(cache.transpose(1, 2))
-    buffered[:, 2:].copy_(current)
-    torch.testing.assert_close(attached, buffered)
-    torch.testing.assert_close(_attach_conv_history(None, current, 2)[:, :2], torch.zeros(2, 2, 4))
-    torch.testing.assert_close(_attach_conv_history(None, current, 2)[:, 2:], current)
+    cache = torch.randn(2, 2, 4)  # already frames-major
+    attached = _attach_history(cache, current, 2)
+    torch.testing.assert_close(attached[:, :2], cache)
+    torch.testing.assert_close(attached[:, 2:], current)
+    torch.testing.assert_close(_attach_history(None, current, 2)[:, :2], torch.zeros(2, 2, 4))
+    torch.testing.assert_close(_attach_history(None, current, 2)[:, 2:], current)
 
 
 def test_npu_fused_body_rejects_slot_pool() -> None:

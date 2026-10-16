@@ -421,19 +421,8 @@ def test_fused_body_npugraph_matches_its_eager_path_with_inference_weights():
     static_cnn = torch.empty_like(cnn)
     static_att = torch.empty(2, 2, 2, 11, 16, device="npu")
 
-    def run(cnn_out, att_out, *, fuse_cache_update=True):
-        return blocks_forward_chunk_fused_npu(
-            estimator,
-            x,
-            embedding,
-            mask,
-            cnn,
-            att,
-            cnn_out,
-            att_out,
-            lengths,
-            fuse_cache_update=fuse_cache_update,
-        )
+    def run(cnn_out, att_out, body=blocks_forward_chunk_fused_npu):
+        return body(estimator, x, embedding, mask, cnn, att, cnn_out, att_out, lengths)
 
     with npu_token2wav_sdpa_context(require_math=True):
         run(static_cnn, static_att)
@@ -446,14 +435,19 @@ def test_fused_body_npugraph_matches_its_eager_path_with_inference_weights():
             att.normal_()
             mask[..., -2:] = False
             expected_cnn, expected_att = torch.empty_like(static_cnn), torch.empty_like(static_att)
-            # Reference keeps the original transpose/cat/gather/copy path.
-            expected = run(expected_cnn, expected_att, fuse_cache_update=False)
+            expected = run(expected_cnn, expected_att)
+            ragged_cnn, ragged_att = torch.empty_like(static_cnn), torch.empty_like(static_att)
+            ragged = run(ragged_cnn, ragged_att, BatchedToken2Wav._blocks_forward_chunk_ragged)
             graph.replay()
             torch.npu.synchronize()
-            for value, reference in zip(
-                (output, static_cnn, static_att), (expected, expected_cnn, expected_att), strict=True
+            for value, reference, unfused in zip(
+                (output, static_cnn, static_att),
+                (expected, expected_cnn, expected_att),
+                (ragged, ragged_cnn, ragged_att),
+                strict=True,
             ):
                 torch.testing.assert_close(value, reference, rtol=1e-5, atol=1e-6)
+                torch.testing.assert_close(value, unfused, rtol=1e-3, atol=1e-3)
 
 
 @pytest.mark.parametrize("rows", [1, 4])

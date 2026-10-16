@@ -442,17 +442,17 @@ class MiniCPMO45Code2Wav(nn.Module):
             "max_graph_batch": max_graph_batch,
             "micro_batch_size": micro_batch_size,
             "pad_max_rows": extra.get("whole_euler_pad_max_rows"),
-            # CUDA uses tiled TF32 attention on SM80+ and SDPA otherwise.
-            # NPU uses packed QKV, in-place KV and ACLNN AddLayerNorm.
-            # Respect an explicit opt-out, and CUDA's TF32 opt-out.
+            # Default on for CUDA and NPU. CUDA uses tiled TF32 attention on
+            # SM80+ and SDPA otherwise, so it respects the TF32 opt-out; NPU
+            # uses packed QKV, in-place KV and ACLNN AddLayerNorm, independent
+            # of TF32. An explicit ``cfm_fused_body`` overrides either default.
             "fused_body": bool(
                 extra.get(
                     "cfm_fused_body",
-                    current_omni_platform.is_cuda() and _tf32_mode(extra) != "off",
+                    (current_omni_platform.is_cuda() and _tf32_mode(extra) != "off") or current_omni_platform.is_npu(),
                 )
             ),
             "slot_pool": bool(extra.get("cfm_slot_pool", False)),
-            "fused_cache_update": bool(extra.get("cfm_fused_cache_update", True)),
             "row_offset_merge": extra.get("cfm_row_offset_merge", False) is True,
         }
         # Exact-shape flow-encoder graphs (``FlowEncoderGraphs``, default off).

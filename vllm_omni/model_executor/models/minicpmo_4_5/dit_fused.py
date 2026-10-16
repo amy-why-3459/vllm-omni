@@ -112,20 +112,6 @@ def _conv_history(
     return history
 
 
-def _attach_conv_history(old_cache: torch.Tensor | None, current: torch.Tensor, width: int) -> torch.Tensor:
-    """``(N, width + T, C)`` from current frames and an optional ``(N, C, width)`` cache.
-
-    One pad or cat. The CUDA body instead fills a history buffer from inside the
-    fused norm kernel, so only the NPU body, whose norm cannot store into that
-    slice, uses this.
-    """
-    if width <= 0:
-        return current
-    if old_cache is None:
-        return F.pad(current, (0, 0, width, 0))
-    return torch.cat((old_cache.transpose(1, 2), current), dim=1)
-
-
 def causal_cache_index(lengths: torch.Tensor, width: int) -> torch.Tensor:
     """``(N, width)`` history frames that end each row's valid frames, for ``gather_causal_cache``."""
     return lengths[:, None] + torch.arange(width, device=lengths.device)[None, :]
@@ -211,27 +197,8 @@ def blocks_forward_chunk_fused(
     valid_lengths: list[int] | torch.Tensor,
     modulation: torch.Tensor | None = None,
     slots: tuple[torch.Tensor, torch.Tensor] | None = None,
-    *,
-    norm=None,
-    attend=None,
-    conv_weight=None,
-    defer_conv_history: bool = False,
-    write_cache=None,
 ) -> torch.Tensor:
-    """``BatchedToken2Wav._blocks_forward_chunk_ragged`` with fused norms/GEMM/attention.
-
-    ``norm`` and ``attend`` default to the CUDA kernels, which store the conv
-    input straight into the history slot. The NPU body passes Ascend
-    implementations and sets ``defer_conv_history`` so that slot is one pad or
-    cat after the norm returns. ``conv_weight`` defaults to the CUDA packer;
-    NPU passes one that also supports inference tensors.
-    """
-    if norm is None:
-        norm = residual_layer_norm
-    if attend is None:
-        attend = _attention
-    if conv_weight is None:
-        conv_weight = _conv_taps_weight
+    """``BatchedToken2Wav._blocks_forward_chunk_ragged`` with fused norms/GEMM/attention."""
     if isinstance(valid_lengths, torch.Tensor):
         lengths = valid_lengths
     else:
@@ -246,10 +213,10 @@ def blocks_forward_chunk_fused(
     x = estimator.in_proj(estimator_input.transpose(1, 2)).contiguous()
     rows, frames, _ = x.shape
     first = modulation[0]
-    hidden = norm(x, weight=first[_SCALE_MSA], bias=first[_SHIFT_MSA], eps=blocks[0].norm1.eps)
+    hidden = residual_layer_norm(x, weight=first[_SCALE_MSA], bias=first[_SHIFT_MSA], eps=blocks[0].norm1.eps)
     for block_index, block in enumerate(blocks):
         mod = modulation[block_index]
-        x_att = attend(block.attn, hidden, att_cache[block_index], attn_mask, att_cache_buffer[block_index], slots)
+        x_att = _attention(block.attn, hidden, att_cache[block_index], attn_mask, att_cache_buffer[block_index], slots)
 
         # CausalConvBlock: [conv1, LayerNorm, Mish, conv2] on (N, width + T, C) histories.
         conv_layers = block.conv.block
@@ -258,59 +225,34 @@ def blocks_forward_chunk_fused(
         old_cnn = cnn_cache[block_index]
         split = conv1.in_channels
         old_cnn1, old_cnn2 = (None, None) if old_cnn is None else (old_cnn[:, :split], old_cnn[:, split:])
+        history = _conv_history(old_cnn1, rows, width, frames, split, x)
         # x += gate_msa * attention; the conv block's modulated LayerNorm lands in the history.
-        if defer_conv_history:
-            conv_in = norm(
-                x,
-                x_att,
-                gate=mod[_GATE_MSA],
-                weight=mod[_SCALE_CONV],
-                bias=mod[_SHIFT_CONV],
-                eps=block.norm3.eps,
-                residual_out=x,
-            )
-            history = _attach_conv_history(old_cnn1, conv_in, width)
-        else:
-            history = _conv_history(old_cnn1, rows, width, frames, split, x)
-            norm(
-                x,
-                x_att,
-                gate=mod[_GATE_MSA],
-                weight=mod[_SCALE_CONV],
-                bias=mod[_SHIFT_CONV],
-                eps=block.norm3.eps,
-                residual_out=x,
-                out=history[:, width:],
-            )
-        taps1 = F.linear(history.view(-1, conv1.in_channels), conv_weight(conv1))
-        if defer_conv_history:
-            conv_mid = norm(
-                None,
-                taps1.view(rows, width + frames, -1),
-                taps=width + 1,
-                y_bias=conv1.bias,
-                weight=conv_norm.weight,
-                bias=conv_norm.bias,
-                eps=conv_norm.eps,
-                activation="mish",
-            )
-            history2 = _attach_conv_history(old_cnn2, conv_mid, width)
-        else:
-            history2 = _conv_history(old_cnn2, rows, width, frames, conv2.in_channels, x)
-            norm(
-                None,
-                taps1.view(rows, width + frames, -1),
-                taps=width + 1,
-                y_bias=conv1.bias,
-                weight=conv_norm.weight,
-                bias=conv_norm.bias,
-                eps=conv_norm.eps,
-                activation="mish",
-                out=history2[:, width:],
-            )
-        taps2 = F.linear(history2.view(-1, conv2.in_channels), conv_weight(conv2))
+        residual_layer_norm(
+            x,
+            x_att,
+            gate=mod[_GATE_MSA],
+            weight=mod[_SCALE_CONV],
+            bias=mod[_SHIFT_CONV],
+            eps=block.norm3.eps,
+            residual_out=x,
+            out=history[:, width:],
+        )
+        taps1 = F.linear(history.view(-1, conv1.in_channels), _conv_taps_weight(conv1))
+        history2 = _conv_history(old_cnn2, rows, width, frames, conv2.in_channels, x)
+        residual_layer_norm(
+            None,
+            taps1.view(rows, width + frames, -1),
+            taps=width + 1,
+            y_bias=conv1.bias,
+            weight=conv_norm.weight,
+            bias=conv_norm.bias,
+            eps=conv_norm.eps,
+            activation="mish",
+            out=history2[:, width:],
+        )
+        taps2 = F.linear(history2.view(-1, conv2.in_channels), _conv_taps_weight(conv2))
         # x += gate_conv * conv2; the MLP's modulated LayerNorm.
-        mlp_in = norm(
+        mlp_in = residual_layer_norm(
             x,
             taps2.view(rows, width + frames, -1),
             taps=width + 1,
@@ -325,7 +267,7 @@ def blocks_forward_chunk_fused(
         # x += gate_mlp * MLP, then the next block's (or the final layer's) modulated LayerNorm:
         # table row ``depth`` holds the final layer's shift and 1 + scale where a block keeps its MSA pair.
         last = block_index + 1 == depth
-        hidden = norm(
+        hidden = residual_layer_norm(
             x,
             mlp_out,
             gate=mod[_GATE_MLP],
@@ -335,13 +277,10 @@ def blocks_forward_chunk_fused(
             residual_out=None if last else x,
         )
 
+        if width not in cache_index:
+            cache_index[width] = causal_cache_index(lengths, width)
         cnn_out = cnn_cache_buffer[block_index]
-        if write_cache is not None:
-            write_cache(history, history2, lengths, cnn_out)
-        else:
-            if width not in cache_index:
-                cache_index[width] = causal_cache_index(lengths, width)
-            cnn_out[:, :split].copy_(gather_causal_cache(history, cache_index[width]))
-            cnn_out[:, split:].copy_(gather_causal_cache(history2, cache_index[width]))
+        cnn_out[:, :split].copy_(gather_causal_cache(history, cache_index[width]))
+        cnn_out[:, split:].copy_(gather_causal_cache(history2, cache_index[width]))
 
     return estimator.final_layer.linear(hidden).transpose(1, 2)
