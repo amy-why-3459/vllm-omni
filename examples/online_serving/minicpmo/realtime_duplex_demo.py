@@ -512,6 +512,7 @@ async def run_demo(args: argparse.Namespace) -> dict[str, object]:
         input_stream_started_at_s = time.monotonic()
         if input_wav is None:
             frames_sent = 0
+            frame_period_s = 1.0 / max(args.video_fps, 1e-6)
             for i, frame in enumerate(video_frames):
                 frames = [frame]
                 if i < len(stacked_video_frames) and stacked_video_frames[i] is not None:
@@ -519,7 +520,10 @@ async def run_demo(args: argparse.Namespace) -> dict[str, object]:
                 await client.send({"type": "input_audio_buffer.append", "video_frames": frames})
                 frames_sent += 1
                 if not args.no_realtime_pacing:
-                    await asyncio.sleep(1.0 / max(args.video_fps, 1e-6))
+                    # Same media clock as stream_pcm: a sleep of one frame period
+                    # after each send would accumulate send overhead.
+                    delay_s = input_stream_started_at_s + frames_sent * frame_period_s - time.monotonic()
+                    await asyncio.sleep(max(0.0, delay_s))
         else:
             frames_sent = await client.stream_pcm(
                 input_pcm16,

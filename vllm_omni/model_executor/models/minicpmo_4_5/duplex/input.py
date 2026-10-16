@@ -348,6 +348,19 @@ class MiniCPMO45PcmAppendBuffer(PcmAppendBuffer):
         self._reservations.append(reservation)
         return reservation
 
+    def prepare_commit_prefix(
+        self, *, operation_id: str, chunk_period_ms: int
+    ) -> MiniCPMO45PcmAppendReservation | None:
+        # Keep the final VISION unit for the terminal reservation, unless a
+        # speech tail still needs to follow it. Never merge frame groups.
+        if not self._vision_queue or (len(self._vision_queue) == 1 and not (self._turn_had_speech and self._buffer)):
+            return None
+        return self.prepare_append(
+            {"type": "audio", "audio": "", "format": "pcm_f32le", "sample_rate_hz": self._sample_rate_hz or 16000},
+            operation_id=operation_id,
+            chunk_period_ms=chunk_period_ms,
+        )
+
     def prepare_commit(
         self,
         *,

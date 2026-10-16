@@ -325,3 +325,33 @@ def test_video_only_bypasses_partial_microphone_audio_and_restores_on_rollback()
     assert len(_b64_audio(resumed)) == 16000 * 4
     assert resumed["video_frames"] == ["audio-frame"]
     assert not buffer.has_pending()
+
+
+def test_commit_prefix_rollback_preserves_frames_and_speech_tail():
+    buffer = MiniCPMO45PcmAppendBuffer()
+    for frame in ("first", "second"):
+        buffer.prepare_append(
+            dict(pcm_payload(0, speech=False), video_frames=[frame]),
+            operation_id=frame,
+            chunk_period_ms=1000,
+            allow_emit=False,
+        )
+    buffer.prepare_append(pcm_payload(1600), operation_id="speech", chunk_period_ms=1000, allow_emit=False)
+    first = buffer.prepare_commit_prefix(operation_id="prefix", chunk_period_ms=1000)
+    assert first is not None
+    assert first.payload["video_frames"] == ["first"]
+    first.rollback()
+    for frame in ("first", "second"):
+        reservation = buffer.prepare_commit_prefix(operation_id=frame, chunk_period_ms=1000)
+        assert reservation is not None
+        assert reservation.payload["video_frames"] == [frame]
+        assert not reservation.payload.get("audio")
+        reservation.commit()
+    assert buffer.prepare_commit_prefix(operation_id="end", chunk_period_ms=1000) is None
+    terminal = buffer.prepare_commit(operation_id="commit", chunk_period_ms=1000)
+    assert terminal.byte_count == 1600 * 4
+    assert terminal.payload["final"] is True
+    assert len(_b64_audio(terminal.payload)) == 16000 * 4
+    terminal.commit()
+    assert not buffer.has_pending()
+    assert not buffer.has_reserved()
