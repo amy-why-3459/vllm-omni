@@ -48,6 +48,7 @@ from pydantic import ValidationError
 from vllm.logger import init_logger
 
 from vllm_omni.entrypoints.async_omni import AsyncOmni
+from vllm_omni.entrypoints.async_omni_base import ABORT_TIMEOUT_S
 from vllm_omni.entrypoints.openai.errors import InvalidInputReferenceError
 from vllm_omni.entrypoints.openai.protocol.videos import VideoGenerationRequest, VideoParams
 from vllm_omni.entrypoints.openai.stage_params import (
@@ -562,7 +563,12 @@ class OmniStreamingVideoOutputHandler:
 
     async def _abort_request(self, request_id: str) -> None:
         try:
-            await self._engine_client.abort(request_id)
+            # Bound both the coroutine and the executor thread waiting for the
+            # orchestrator acknowledgement, including inside shielded cleanup.
+            await asyncio.wait_for(
+                self._engine_client.abort(request_id, timeout=ABORT_TIMEOUT_S),
+                timeout=ABORT_TIMEOUT_S,
+            )
         except Exception:
             logger.debug("Failed to abort streaming video request %s", request_id, exc_info=True)
 
