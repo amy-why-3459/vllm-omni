@@ -202,8 +202,10 @@ class QwenImage21CausalConv3d(nn.Conv2d):
         assert cache_x is None
         x = x.squeeze(2)  # Single-frame tensors have a unit time axis.
         left, right, top, bottom = self._padding
-        if left == right and top == bottom:
+        if x.device.type == "npu" and left == right and top == bottom:
             # Symmetric pad matches Conv2d padding, so skip the extra pad kernel.
+            # Other devices keep the explicit pad: built-in padding selects
+            # different cuDNN BF16 kernels and drifts from the Diffusers reference.
             x = F.conv2d(
                 x,
                 self.weight,

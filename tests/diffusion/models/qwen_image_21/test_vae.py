@@ -379,6 +379,30 @@ def test_causal_conv_matches_explicit_padding(padding, stride, dtype):
     torch.testing.assert_close(x.grad, reference_input.grad)
 
 
+def test_causal_conv_keeps_explicit_padding_off_npu(monkeypatch):
+    """Built-in conv padding changes cuDNN BF16 kernels, so non-NPU devices must pad explicitly."""
+    from vllm_omni.diffusion.models.qwen_image_21 import autoencoder_kl_qwenimage21 as vae_module
+
+    pads = []
+    original_pad = vae_module.F.pad
+
+    def recording_pad(x, pad, *args, **kwargs):
+        pads.append(tuple(pad))
+        return original_pad(x, pad, *args, **kwargs)
+
+    monkeypatch.setattr(vae_module.F, "pad", recording_pad)
+    torch.manual_seed(0)
+    conv = vae_module.QwenImage21CausalConv3d(4, 8, 3, padding=1).to(torch.bfloat16)
+    x = torch.randn(1, 4, 1, 7, 9, dtype=torch.bfloat16)
+    with torch.inference_mode():
+        actual = conv(x)
+        expected = torch.nn.functional.conv2d(
+            original_pad(x.squeeze(2), conv._padding), conv.weight, conv.bias
+        ).unsqueeze(2)
+    assert pads == [conv._padding]
+    assert torch.equal(actual, expected)
+
+
 def test_causal_conv_preserves_asymmetric_padding():
     from vllm_omni.diffusion.models.qwen_image_21.autoencoder_kl_qwenimage21 import QwenImage21CausalConv3d
 
