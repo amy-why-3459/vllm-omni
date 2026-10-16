@@ -39,6 +39,7 @@ from collections.abc import AsyncGenerator
 from http import HTTPStatus
 from typing import Any, cast
 
+import anyio
 import numpy as np
 import torch
 from fastapi import HTTPException, WebSocket, WebSocketDisconnect
@@ -273,18 +274,22 @@ class OmniStreamingVideoOutputHandler:
             logger.exception("Streaming video output session error: %s", e)
             await self._send_error(websocket, str(e))
         finally:
-            stop_event.set()
-            if control_task is not None:
-                control_task.cancel()
-                await asyncio.gather(control_task, return_exceptions=True)
-            if interaction_delivery_task is not None and request_id is not None:
-                interaction_delivery_task.cancel()
-                await asyncio.gather(interaction_delivery_task, return_exceptions=True)
-            if response_task is not None:
-                response_task.cancel()
-                await asyncio.gather(response_task, return_exceptions=True)
-            if request_id is not None and not generation_done:
-                await self._abort_request(request_id)
+            # ASGI disconnect cancellation can arrive after session.done, while
+            # we await a child. Finish reaping every task and aborting unfinished
+            # generation before leaving the session's cancellation scope.
+            with anyio.CancelScope(shield=True):
+                stop_event.set()
+                if control_task is not None:
+                    control_task.cancel()
+                    await asyncio.gather(control_task, return_exceptions=True)
+                if interaction_delivery_task is not None and request_id is not None:
+                    interaction_delivery_task.cancel()
+                    await asyncio.gather(interaction_delivery_task, return_exceptions=True)
+                if response_task is not None:
+                    response_task.cancel()
+                    await asyncio.gather(response_task, return_exceptions=True)
+                if request_id is not None and not generation_done:
+                    await self._abort_request(request_id)
 
     async def _receive_start(self, websocket: WebSocket) -> tuple[VideoGenerationRequest, StreamingVideoFormat] | None:
         try:
@@ -362,7 +367,7 @@ class OmniStreamingVideoOutputHandler:
         send_lock: asyncio.Lock,
         stop_event: asyncio.Event,
         request_id: str,
-        timeout: float,
+        timeout: float | None,
     ) -> None:
         try:
             while True:

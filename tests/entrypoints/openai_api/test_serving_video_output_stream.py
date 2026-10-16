@@ -12,9 +12,10 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock
 
+import anyio
 import numpy as np
 import pytest
-from fastapi import FastAPI, HTTPException, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from pytest_mock import MockerFixture
 from starlette.testclient import TestClient
 
@@ -1461,3 +1462,50 @@ async def test_stop_after_final_media_cancels_pending_interaction(mocker: Mocker
     # Cancellation response latency is exposed on the stop terminal.
     assert 0 <= ws.sent_json[-1]["stop_latency_s"] < 30
     assert not (asyncio.all_tasks() - tasks_before)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disconnected", [False, True])
+async def test_session_scope_cancel_during_cleanup_reaps_all_tasks(mocker: MockerFixture, disconnected: bool):
+    """A disconnect during cleanup must not strand the other session tasks."""
+
+    async def generate(*_args, **_kwargs):
+        yield OmniRequestOutput.from_diffusion(
+            request_id="req-ws", images=[_fake_video_frames(2)], final_output_type="image", finished=True
+        )
+
+        if disconnected:
+            raise WebSocketDisconnect()
+
+    handler, engine, ws = _build_handler_for_async_tests(mocker, mock_generate=generate)
+    original_control = handler._control_loop
+    cleanup_completed = False
+    tasks_before = asyncio.all_tasks()
+    try:
+        with anyio.CancelScope() as scope:
+
+            async def control(*args, **kwargs):
+                try:
+                    await original_control(*args, **kwargs)
+                finally:
+                    # Model Starlette cancelling the ASGI scope as the client exits
+                    # immediately after receiving session.done.
+                    scope.cancel()
+
+            mocker.patch.object(handler, "_control_loop", control)
+            await handler.handle_session(ws)
+            cleanup_completed = True
+
+    finally:
+        remaining = asyncio.all_tasks() - tasks_before
+        # Reap leaked tasks on the failing baseline, too.
+        for task in remaining:
+            task.cancel()
+        await asyncio.gather(*remaining, return_exceptions=True)
+    assert cleanup_completed
+    assert not remaining
+    if disconnected:
+        engine.abort.assert_awaited_once()
+    else:
+        assert ws.sent_json[-1]["type"] == "session.done"
+        engine.abort.assert_not_awaited()
