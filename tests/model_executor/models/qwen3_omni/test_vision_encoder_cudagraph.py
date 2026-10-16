@@ -73,7 +73,12 @@ def _vision():
     model.merger_list = nn.ModuleList([_Merger(), _Merger()])
 
     def positions(grid):
-        return torch.cat([torch.arange(int(t * h * w)).float().unsqueeze(1).expand(-1, 4) + int(w) for t, h, w in grid])
+        # Per frame, like Qwen3-Omni RoPE: temporal copies share spatial positions.
+        frames = []
+        for t, h, w in grid:
+            frame = torch.arange(int(h * w)).float().unsqueeze(1).expand(-1, 4) + int(w)
+            frames.append(frame.repeat(int(t), 1))
+        return torch.cat(frames)
 
     model.fast_pos_embed_interpolate = positions
     model.rot_pos_emb = lambda grid: (positions(grid) / 10, positions(grid) / 20)
@@ -285,6 +290,25 @@ def test_group_that_does_not_fit_one_replay_goes_back_to_the_runner(grids):
     assert manager.graph_hits == 0 and manager.graph_misses == len(grids)
 
 
+@pytest.mark.parametrize(
+    "bounds,total,max_sequences,expected",
+    [
+        # 9 frames of 1024 patches in a 16384-patch graph: seven 1024-patch
+        # padding sequences instead of one 7168-patch sequence.
+        ([1024 * i for i in range(10)], 16384, 128, [1024 * i for i in range(17)]),
+        ([0, 16], 16, 4, [0, 16]),
+        ([0, 300], 512, 128, [0, 300, 512]),
+        # Too few sequence slots: padding pieces grow beyond the frame size.
+        ([0, 4, 8], 40, 4, [0, 4, 8, 24, 40]),
+        ([0], 10, 4, [0, 3, 6, 9, 10]),
+    ],
+)
+def test_attention_padding_is_split_into_short_sequences(bounds, total, max_sequences, expected):
+    padded = graph_module.pad_attention_bounds(bounds, total, max_sequences)
+    assert padded == expected
+    assert len(padded) - 1 <= max(max_sequences, len(bounds))
+
+
 def test_empty_shard_is_valid():
     model = _thinker()
     manager = _cpu_manager(model)
@@ -401,12 +425,18 @@ def test_runner_encodes_a_group_beyond_one_replay_in_one_eager_call(monkeypatch)
     assert manager.graph_hits == 0 and manager.graph_misses == 2
 
 
-def test_video_frame_capacity_falls_back_before_copying_buffers():
+def test_video_reuses_one_graph_across_frame_chunks():
     model = _thinker()
     model.vllm_config.compilation_config.encoder_cudagraph_max_frames_per_batch = 2
     manager = _cpu_manager(model)
-    video = {"video_grid_thw": torch.tensor([[3, 2, 2]]), "pixel_values_videos": torch.ones(12, 4)}
-    assert manager.execute(video) is None
+    pixels = torch.arange(24 * 4).float().reshape(24, 4)
+    video = {"video_grid_thw": torch.tensor([[6, 2, 2]]), "pixel_values_videos": pixels}
+    outputs = manager.execute(video)
+    assert outputs is not None and manager.graph_misses == 0
+    torch.testing.assert_close(outputs[0], model.encoder_eager_forward(video))
+    # One frame wider than the captured attention bound still stays eager.
+    oversized = {"video_grid_thw": torch.tensor([[2, 64, 66]]), "pixel_values_videos": torch.ones(2 * 64 * 66, 4)}
+    assert manager.execute(oversized) is None
     assert manager.graph_misses == 1
 
 
@@ -438,6 +468,24 @@ def test_audio_only_runner_captures_and_clears_audio_graphs():
     assert _runner_factory(model, model.vllm_config) is None
 
 
+def test_frame_above_the_spatial_attention_bound_stays_eager():
+    cfg = _config()
+    cfg.scheduler_config.max_num_batched_tokens = 2048
+    cfg.compilation_config.encoder_cudagraph_token_budgets = [2048]
+    cfg.compilation_config.encoder_cudagraph_max_vision_items_per_batch = 1
+    model = _thinker(cfg)
+    manager = _cpu_manager(model)
+    assert manager.execute(_images([[1, 64, 64]])) is not None
+    assert manager.graph_misses == 0
+    # 1600 tokens fit the budget, but 6400 patches exceed the captured max_seqlen.
+    assert manager.execute(_images([[1, 80, 80]])) is None
+    assert manager.graph_misses == 1
+    # Frame chunking must not split such a frame into replays either.
+    video = {"video_grid_thw": torch.tensor([[2, 80, 80]]), "pixel_values_videos": torch.ones(2 * 80 * 80, 4)}
+    assert manager.execute(video) is None
+    assert manager.graph_misses == 2
+
+
 def test_large_video_capture_uses_spatial_attention_bound():
     values = (
         _thinker().prepare_encoder_cudagraph_capture_inputs(8192, 16, 128, torch.device("cpu"), torch.float32).values
@@ -449,13 +497,16 @@ def test_large_video_capture_uses_spatial_attention_bound():
     assert values["cu_seqlens"][-1].item() == 8192 * 4
 
 
+@pytest.mark.parametrize("runner", ["mrv2", "upstream"])
 @pytest.mark.parametrize("audio_only", [False, True])
-def test_mrv2_rejects_encoder_graph_opt_in_before_tower_construction(audio_only):
+def test_non_omni_v1_runners_reject_encoder_graph_opt_in_before_tower_construction(audio_only, runner):
     cfg = _config()
-    cfg.model_config.use_v2_model_runner = True
+    if runner == "mrv2":
+        cfg.model_config.use_v2_model_runner = True
+    # Otherwise an upstream ModelConfig has no use_v2_model_runner at all.
     if audio_only:
         cfg.model_config.multimodal_config.get_limit_per_prompt = lambda modality: int(modality == "audio")
-    with pytest.raises(ValueError, match="encoder graphs require model_runner=v1"):
+    with pytest.raises(ValueError, match="encoder graphs require the vLLM-Omni V1 runner"):
         Qwen3OmniMoeThinkerForConditionalGeneration(vllm_config=cfg)
 
 

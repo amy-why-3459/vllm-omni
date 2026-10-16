@@ -74,7 +74,8 @@ vllm serve Qwen/Qwen3-Omni-30B-A3B-Instruct --omni --port 8091 \
     "2": {"max_num_seqs": 4}
   }'
 
-# Opt in to encoder graphs on the CUDA V1 runner after checking memory headroom
+# Encoder graphs on the CUDA V1 runner. The shipped stage-0 profile already
+# enables these budgets.
 vllm serve Qwen/Qwen3-Omni-30B-A3B-Instruct --omni --port 8091 \
   --stage-overrides '{"0": {"compilation_config": {
     "custom_ops": ["+rotary_embedding"],
@@ -85,17 +86,13 @@ vllm serve Qwen/Qwen3-Omni-30B-A3B-Instruct --omni --port 8091 \
   }}}'
 ```
 
-Encoder graphs are **opt-in** on CUDA and supported Ascend NPUs (excluding
-310P). The shipped V1 and MRv2 profiles leave them disabled. MRv2 currently
-rejects `cudagraph_mm_encoder: true`: its encoder manager does not enforce the
+The shipped CUDA and NPU V1 profiles enable encoder graphs with the budgets
+above. Supported NPUs exclude 310P. MRv2 keeps them off and rejects
+`cudagraph_mm_encoder: true`: its encoder manager does not enforce the
 spatial and frame bounds required by these captures. Use `model_runner: v1`
 for encoder graphs. `cudagraph_mode: NONE` skips encoder capture as well.
 
-Encoder graphs add startup work and consume memory otherwise available to KV
-cache. Capturing every tail width, plus vision budgets through 16384,
-[reserved about 6.7 GiB](https://github.com/vllm-project/vllm-omni/pull/8733#pullrequestreview-5483687759)
-on A800 80GB and the shipped 65536-token configuration could not start. The
-budgets above and the automatically inferred budgets stop at 4096. Raise them
+The budgets above and the automatically inferred budgets stop at 4096. Raise them
 (8192 or 16384) only when KV headroom
 remains. Audio capture is one full-width graph for each of chunk counts 1..64
 (a 60-second clip, including a one-frame tail). Short tail rows replay that

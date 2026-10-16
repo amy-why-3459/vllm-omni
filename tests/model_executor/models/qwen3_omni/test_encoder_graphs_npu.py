@@ -64,10 +64,12 @@ def _capture(manager):
 
 
 @pytest.mark.parametrize("input_stride", [1, 2])
-def test_audio_and_vision_replay(npu_state, input_stride):
+def test_audio_and_vision_replay(npu_state, input_stride, monkeypatch):
     from transformers.models.qwen3_omni_moe.configuration_qwen3_omni_moe import Qwen3OmniMoeAudioEncoderConfig
     from vllm.utils.torch_utils import set_default_torch_dtype
+    from vllm_ascend.worker.encoder_acl_graph import update_encoder_graph_params
 
+    import vllm_omni.platforms.npu.models.qwen3_omni_encoder_graphs as graphs_module
     from tests.model_executor.models.qwen3_omni.test_vision_encoder_cudagraph_cuda import _engine_config, _vision_config
     from vllm_omni.model_executor.models.qwen3_omni.audio_encoder_cudagraph import audio_chunk_metadata
     from vllm_omni.model_executor.models.qwen3_omni.qwen3_omni_moe_thinker import (
@@ -124,6 +126,14 @@ def test_audio_and_vision_replay(npu_state, input_stride):
     manager = OmniGPUModelRunner._create_encoder_cudagraph_manager(runner)
     assert isinstance(manager, SingleReplayEncoderNpuGraphManager)
     retained = []
+    fia_updates = []
+    previous_grids = None
+
+    def counted_update(*args, **kwargs):
+        fia_updates.append(args)
+        return update_encoder_graph_params(*args, **kwargs)
+
+    monkeypatch.setattr(graphs_module, "update_encoder_graph_params", counted_update)
     try:
         _capture(manager)
         with torch.inference_mode():
@@ -136,6 +146,8 @@ def test_audio_and_vision_replay(npu_state, input_stride):
                 ([201], [[1, 16, 16]]),
                 ([200], [[1, 4, 4]]),
                 ([200], [[1, 4, 4]]),
+                # Three back-to-back frame-chunk replays of the largest graph.
+                ([200], [[10, 8, 8]]),
                 ([100, 100], [[1, 4, 4]]),
             ]:
                 features = torch.randn(80, sum(lengths) * input_stride, dtype=torch.bfloat16, device="npu")[
@@ -163,8 +175,22 @@ def test_audio_and_vision_replay(npu_state, input_stride):
                     "pixel_values_videos" if modality == "video" else "pixel_values": pixels,
                 }
                 ref = model.encoder_eager_forward(inputs)
+                device_bounds = visual.prepare_encoder_metadata(grids)["cu_seqlens"].cpu().tolist()
+                host_bounds = manager._host_cu_seqlens(inputs, device_bounds[-1] + 64, len(device_bounds) + 1)
+                assert host_bounds[: len(device_bounds)] == device_bounds
+                assert host_bounds[-1] == device_bounds[-1] + 64
+                vision_hits = manager.graph_hits
+                fia_updates.clear()
                 parts = manager.execute(inputs)
                 assert parts is not None
+                if grids == previous_grids:
+                    # The graph already holds these FIA lengths.
+                    assert not fia_updates
+                if grids == [[10, 8, 8]]:
+                    assert manager.graph_hits == vision_hits + 3
+                    # Chunks of 4, 4 and 2 frames: the second chunk reuses the first's lengths.
+                    assert len(fia_updates) == 2
+                previous_grids = grids
                 got = torch.cat(parts)
                 torch.testing.assert_close(got, ref, rtol=0.016, atol=0.002)
                 retained.extend((part, part.clone()) for part in parts)

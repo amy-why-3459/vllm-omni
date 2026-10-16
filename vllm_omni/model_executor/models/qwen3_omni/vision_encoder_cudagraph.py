@@ -18,6 +18,10 @@ from vllm.v1.worker.encoder_cudagraph_defs import (
 
 from vllm_omni.platforms import current_omni_platform
 
+# Captured attention bound for one image or video frame. Larger frames must
+# stay eager because replay reuses the max_seqlen baked in at capture.
+MAX_GRAPH_FRAME_PATCHES = 4096
+
 
 def supports_npu_encoder_graphs() -> bool:
     if not current_omni_platform.is_npu():
@@ -25,6 +29,27 @@ def supports_npu_encoder_graphs() -> bool:
     from vllm_omni.platforms.npu._310p import is_310p
 
     return not is_310p()
+
+
+def pad_attention_bounds(bounds: list[int], total: int, max_sequences: int) -> list[int]:
+    """Cover replay padding with short attention sequences.
+
+    Ascend FIA must assign every query row to a sequence. A single sequence
+    over all padding costs attention quadratic in the padding length, often
+    more than the live frames. Pieces no longer than the longest live sequence
+    cost at most as much as the same number of live rows. The piece length
+    grows only when the sequence count would exceed ``max_sequences``.
+    """
+    pad = total - bounds[-1]
+    if pad <= 0:
+        return list(bounds)
+    longest = max((end - start for start, end in zip(bounds, bounds[1:])), default=0)
+    slots = max(1, max_sequences - (len(bounds) - 1))
+    step = max(longest, -(-pad // slots), 1)
+    padded = list(bounds)
+    while padded[-1] < total:
+        padded.append(min(total, padded[-1] + step))
+    return padded
 
 
 def _pad_cu_seqlens(dst: torch.Tensor, src: torch.Tensor) -> None:
@@ -100,7 +125,7 @@ class Qwen3OmniVisionEncoderCudaGraphMixin:
 
     def encoder_cudagraph_replay_supported(self, mm_kwargs: dict[str, Any], max_frames_per_batch: int) -> bool:
         grid = self._image_grid(mm_kwargs)
-        if any(h * w > 4096 for _, h, w in grid):
+        if any(h * w > MAX_GRAPH_FRAME_PATCHES for _, h, w in grid):
             return False
         return self.get_input_modality(mm_kwargs) != "video" or sum(t for t, _, _ in grid) <= max_frames_per_batch
 
@@ -152,7 +177,7 @@ class Qwen3OmniVisionEncoderCudaGraphMixin:
         # A video has short spatial frame sequences, even when its total
         # token budget is large. Avoid capturing a 32768-patch attention bound
         # for every frame; oversized individual frames use eager instead.
-        max_sequence = min(patches, 4096)
+        max_sequence = min(patches, MAX_GRAPH_FRAME_PATCHES)
         capture_lengths = [max_sequence] * (patches // max_sequence)
         if patches % max_sequence:
             capture_lengths.append(patches % max_sequence)
