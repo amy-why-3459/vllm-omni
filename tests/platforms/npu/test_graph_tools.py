@@ -281,13 +281,15 @@ def test_code2wav_estimator_graph_dispatch_is_platform_owned(monkeypatch, with_c
         _trt_stepper = None
         _cfm_graph_wrapper = None
 
+        def _time_embedding(self, estimator, time):
+            return estimator.t_embedder(time)
+
     class _Runner:
         def run(self, operation, inputs, constants, compute):
             calls.append((operation, inputs, constants))
             return compute(*inputs)
 
     backend = _Backend()
-    backend._time_embedding = lambda estimator, time: estimator.t_embedder(time)
     runner = _Runner()
     code2wav_patch._backend_graph_runners[backend] = runner
 
@@ -392,6 +394,9 @@ def test_code2wav_pad_mask_replays_as_a_graph_input(monkeypatch, with_cache):
     class _Backend:
         _trt_stepper = None
         _cfm_graph_wrapper = None
+
+        def _time_embedding(self, estimator, time):
+            return estimator.t_embedder(time)
 
     class _Runner:
         def run(self, operation, inputs, constants, compute):
