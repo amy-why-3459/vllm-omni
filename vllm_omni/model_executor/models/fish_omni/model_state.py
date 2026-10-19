@@ -39,6 +39,21 @@ logger = init_logger(__name__)
 _MASK64 = (1 << 64) - 1
 
 
+def _broadcast_tp_tensor(tensor: torch.Tensor) -> None:
+    """Copy ``tensor`` from tensor-parallel rank 0 when that group exists."""
+    from vllm.distributed.parallel_state import (
+        get_tensor_model_parallel_world_size,
+        get_tp_group,
+        model_parallel_is_initialized,
+    )
+
+    if not model_parallel_is_initialized():
+        return
+    if get_tensor_model_parallel_world_size() <= 1:
+        return
+    get_tp_group().broadcast(tensor, src=0)
+
+
 def _frame_seed(seed: int, frame: int) -> int:
     """Seed of a request's ``frame``-th sampled frame (splitmix64 of seed and index)."""
     x = (seed * 0x9E3779B97F4A7C15 + frame + 1) & _MASK64
@@ -308,16 +323,18 @@ class FishOmniModelState(OmniModelState, MambaHybridModelState):
         batch row) that samples frame ``frames[row]`` draws from that frame's seed."""
         noise = self.buffers.noise
         noise.uniform_()
-        if not self._seeds:
-            return
-        for row, req_id in enumerate(req_ids):
-            seed = self._seeds.get(req_id)
-            if seed is None or not sampling[row]:
-                continue
-            if self._seed_generator is None:
-                self._seed_generator = torch.Generator(device=noise.device)
-            self._seed_generator.manual_seed(_frame_seed(seed, int(frames[row])))
-            noise[row].uniform_(generator=self._seed_generator)
+        if self._seeds:
+            for row, req_id in enumerate(req_ids):
+                seed = self._seeds.get(req_id)
+                if seed is None or not sampling[row]:
+                    continue
+                if self._seed_generator is None:
+                    self._seed_generator = torch.Generator(device=noise.device)
+                self._seed_generator.manual_seed(_frame_seed(seed, int(frames[row])))
+                noise[row].uniform_(generator=self._seed_generator)
+        # Each tensor-parallel rank samples inside the forward. Device RNG is
+        # not shared, so rank 0's noise is the one every rank uses.
+        _broadcast_tp_tensor(noise)
 
     def run_postprocess(self, hidden_states, input_batch) -> None:
         self.model.num_sample_rows = None
@@ -403,4 +420,38 @@ class FishOmniModelState(OmniModelState, MambaHybridModelState):
         return hidden, _FrameRowsSnapshot(frames, valid, partitioned=self._partitioned)
 
 
-__all__ = ["FishOmniModelState"]
+class NPUFishOmniModelState(FishOmniModelState):
+    """Drama 3 request state whose attention metadata is the Ascend V2 one.
+
+    Request slots, frame rows and sampling stay on ``FishOmniModelState``.
+    ``prepare_attn`` and the GDN align pre-copy come from the Ascend hybrid
+    state, which reads ``attn_state`` and ``seq_lens_np`` off the Ascend batch.
+    """
+
+    uses_ascend_attn_metadata = True
+
+    def __init__(self, vllm_config, model, encoder_cache, device) -> None:
+        super().__init__(vllm_config, model, encoder_cache, device)
+        # AscendMambaHybridModelState fields used by its preprocess_state.
+        self._layerwise_mamba_copy = None
+        self._layer_state_ranges = None
+
+    def prepare_attn(self, *args: Any, **kwargs: Any):
+        from vllm_ascend.worker.v2.model_states.mamba_hybrid import AscendMambaHybridModelState
+
+        return AscendMambaHybridModelState.prepare_attn(self, *args, **kwargs)
+
+    def preprocess_state(self, *args: Any, **kwargs: Any):
+        from vllm_ascend.worker.v2.model_states.mamba_hybrid import AscendMambaHybridModelState
+
+        return AscendMambaHybridModelState.preprocess_state(self, *args, **kwargs)
+
+
+def create_fish_omni_model_state(vllm_config, model, encoder_cache, device):
+    """CUDA keeps the upstream hybrid state; NPU builds Ascend attention metadata."""
+    if getattr(device, "type", None) == "npu":
+        return NPUFishOmniModelState(vllm_config, model, encoder_cache, device)
+    return FishOmniModelState(vllm_config, model, encoder_cache, device)
+
+
+__all__ = ["FishOmniModelState", "NPUFishOmniModelState", "create_fish_omni_model_state"]

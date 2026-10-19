@@ -146,3 +146,17 @@ def test_rejects_unsupported_text_values(key, value):
 def test_rejects_dense_backbone_layer():
     with pytest.raises(ValueError, match="every backbone layer must be MoE"):
         _config(mlp_layer_types=["moe"] * 39 + ["dense"])
+
+
+def test_tensor_and_expert_parallel_are_allowed():
+    from types import SimpleNamespace
+
+    from vllm_omni.model_executor.models.fish_omni.fish_omni_model import _reject_unsupported_fish_parallel
+
+    _reject_unsupported_fish_parallel(
+        SimpleNamespace(pipeline_parallel_size=1, prefill_context_parallel_size=1, tensor_parallel_size=2)
+    )
+    with pytest.raises(NotImplementedError, match="one pipeline rank"):
+        _reject_unsupported_fish_parallel(SimpleNamespace(pipeline_parallel_size=2, prefill_context_parallel_size=1))
+    with pytest.raises(NotImplementedError, match="prefill context"):
+        _reject_unsupported_fish_parallel(SimpleNamespace(pipeline_parallel_size=1, prefill_context_parallel_size=2))

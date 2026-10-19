@@ -44,6 +44,29 @@ from vllm_omni.engine.stage_init_utils import (
 logger = init_logger(__name__)
 
 
+def _install_ascend_mamba_prefill_end_compat() -> None:
+    """Let Ascend's mamba block allocator accept vLLM's ``prefill_end``.
+
+    vLLM passes ``prefill_end`` into every cache manager. Ascend's override
+    was written before that argument and rejects the call, so the first
+    Drama 3 schedule dies before any forward.
+    """
+    try:
+        from vllm_ascend.patch.platform.patch_mamba_manager import AscendMambaManager
+    except Exception:
+        return
+    current = AscendMambaManager.get_num_blocks_to_allocate
+    if getattr(current, "_omni_accepts_prefill_end", False):
+        return
+
+    def get_num_blocks_to_allocate(self, *args: Any, prefill_end: int = 0, **kwargs: Any) -> int:
+        del prefill_end
+        return current(self, *args, **kwargs)
+
+    get_num_blocks_to_allocate._omni_accepts_prefill_end = True  # type: ignore[attr-defined]
+    AscendMambaManager.get_num_blocks_to_allocate = get_num_blocks_to_allocate  # type: ignore[method-assign]
+
+
 _SIGNAL_EXIT_BASE = 128
 
 
@@ -139,6 +162,7 @@ class StageEngineCoreProc(EngineCoreProc):
     """
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
+        _install_ascend_mamba_prefill_end_compat()
         super().__init__(*args, **kwargs)
         _bind_first_audio_sink(self.model_executor, self.output_queue, self.scheduler)
         if _bind_native_data_plane_ready_sink(self.model_executor, self.scheduler):

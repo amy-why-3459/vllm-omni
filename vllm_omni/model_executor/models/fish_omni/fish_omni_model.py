@@ -40,6 +40,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.models.interfaces import HasInnerState, IsHybrid
 from vllm.model_executor.models.qwen3_5 import Qwen3_5ForCausalLMBase, Qwen3_5Model
 from vllm.model_executor.models.utils import maybe_prefix
+from vllm.platforms import current_platform
 from vllm.sequence import IntermediateTensors
 
 from vllm_omni.model_executor.models.fish_speech.dac_encoder import (
@@ -165,6 +166,42 @@ class FishOmniBuffers:
         self.noise: torch.Tensor
 
 
+def _install_npu_eager_qk_rope() -> None:
+    """Keep Qwen3.5 attention off the fused Triton kernel on Ascend.
+
+    The codebook tower selects the torch implementation itself. This only
+    stops the backbone from taking the same kernel when the platform is
+    reported as CUDA-like inside the worker.
+    """
+    import vllm.model_executor.models.qwen3_next as qwen_next
+
+    from vllm_omni.model_executor.models.fish_omni.kernels import eager_qk_rmsnorm_rope_gate
+
+    qwen_next.fused_qk_rmsnorm_rope_gate = eager_qk_rmsnorm_rope_gate
+    attention = qwen_next.Qwen3NextAttention
+    if getattr(attention.__init__, "_fish_omni_npu_eager", False):
+        return
+    original_init = attention.__init__
+
+    def _eager_qk_rope_init(attn, *args, **kwargs):
+        original_init(attn, *args, **kwargs)
+        attn.use_fused_qk_norm_rope_gate = False
+
+    _eager_qk_rope_init._fish_omni_npu_eager = True
+    attention.__init__ = _eager_qk_rope_init
+
+
+def _reject_unsupported_fish_parallel(parallel_config: Any) -> None:
+    """Drama 3 can shard the Qwen3.5 backbone (tensor parallel) and its routed
+    experts (expert parallel). Pipeline and prefill-context parallelism are not
+    wired through the Omni V2 runner.
+    """
+    if parallel_config.pipeline_parallel_size != 1:
+        raise NotImplementedError("fish_omni runs with one pipeline rank")
+    if getattr(parallel_config, "prefill_context_parallel_size", 1) != 1:
+        raise NotImplementedError("fish_omni does not support prefill context parallelism")
+
+
 # The tower and frame sampling compile with the backbone (its own decorator
 # inlines), so mixed steps replay them in PIECEWISE graphs.
 @support_torch_compile(
@@ -180,11 +217,7 @@ class FishOmniForConditionalGeneration(nn.Module, HasInnerState, IsHybrid):
     def __init__(self, *, vllm_config: VllmConfig, prefix: str = "") -> None:
         super().__init__()
         config: FishOmniConfig = vllm_config.model_config.hf_config  # type: ignore[assignment]
-        if (
-            vllm_config.parallel_config.tensor_parallel_size != 1
-            or vllm_config.parallel_config.pipeline_parallel_size != 1
-        ):
-            raise NotImplementedError("fish_omni runs with one tensor and pipeline rank")
+        _reject_unsupported_fish_parallel(vllm_config.parallel_config)
         self.vllm_config = vllm_config
         self.config = config
         self.model_path = vllm_config.model_config.model
@@ -202,21 +235,40 @@ class FishOmniForConditionalGeneration(nn.Module, HasInnerState, IsHybrid):
         self.embedding_scale = 1.0 / math.sqrt(1.0 + self.backbone_codebooks)
         hidden_size = text_config.hidden_size
 
+        if current_platform.device_type == "npu":
+            # Before the backbone is built, so construction and the memory
+            # profile both miss the fused Triton kernel.
+            _install_npu_eager_qk_rope()
         self.model = Qwen3_5Model(vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model"))
-        if vllm_config.speculative_config is None:
-            # vLLM routes GDN decode through the fused-norm packed wrapper by
-            # default (VLLM_GDN_DECODE_KERNEL=cuda). Without speculative decoding
-            # it never reaches its MTP kernel and only adds copies and an
-            # unfusable gated norm around the standard path (vllm-project/vllm#59735):
-            # RTF 0.520 -> 0.512 at 128 streams with the standard path.
-            for module in self.model.modules():
-                if getattr(module, "enable_fused_gdn_decode", False):
-                    module.enable_fused_gdn_decode = False
-        # Steps with prefills: packed decode kernel, FlashInfer on the state
-        # pool in place, outputs written straight into the buffer.
-        from .gdn import install_drama3_gdn
+        if current_platform.device_type == "npu":
 
-        install_drama3_gdn(self.model)
+            def _force_eager_qk(module, inputs):
+                module.use_fused_qk_norm_rope_gate = False
+
+            armed = 0
+            for module in self.model.modules():
+                if not hasattr(module, "use_fused_qk_norm_rope_gate"):
+                    continue
+                module.use_fused_qk_norm_rope_gate = False
+                module.register_forward_pre_hook(_force_eager_qk)
+                armed += 1
+            logger.info("fish_omni: eager QK-norm RoPE on NPU (%d attention modules)", armed)
+        # Triton tower / GDN kernels build on CUDA and ROCm; Ascend patches the Qwen class itself.
+        if current_platform.is_cuda_alike():
+            if vllm_config.speculative_config is None:
+                # vLLM routes GDN decode through the fused-norm packed wrapper by
+                # default (VLLM_GDN_DECODE_KERNEL=cuda). Without speculative decoding
+                # it never reaches its MTP kernel and only adds copies and an
+                # unfusable gated norm around the standard path (vllm-project/vllm#59735):
+                # RTF 0.520 -> 0.512 at 128 streams with the standard path.
+                for module in self.model.modules():
+                    if getattr(module, "enable_fused_gdn_decode", False):
+                        module.enable_fused_gdn_decode = False
+            # Steps with prefills: packed decode kernel, FlashInfer on the state
+            # pool in place, outputs written straight into the buffer.
+            from .gdn import install_drama3_gdn
+
+            install_drama3_gdn(self.model)
 
         # Only end-of-speech and the semantic band are ever sampled: keep those
         # lm_head rows, which cuts the per-frame head read from 1 GB to 16 MB.
@@ -292,9 +344,9 @@ class FishOmniForConditionalGeneration(nn.Module, HasInnerState, IsHybrid):
         return Qwen3_5ForCausalLMBase.get_mamba_state_copy_func()
 
     def create_mrv2_model_state(self, vllm_config, encoder_cache, device):
-        from .model_state import FishOmniModelState
+        from .model_state import create_fish_omni_model_state
 
-        return FishOmniModelState(vllm_config, self, encoder_cache, device)
+        return create_fish_omni_model_state(vllm_config, self, encoder_cache, device)
 
     # ------------------------------------------------------------------
     # Prompt

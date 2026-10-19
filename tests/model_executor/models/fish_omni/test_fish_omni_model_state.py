@@ -5,6 +5,7 @@ and per-request seeds. The model is a stand-in that builds fixed prompt rows."""
 
 from collections.abc import Sequence
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -213,3 +214,43 @@ def test_max_top_k_is_a_power_of_two_from_the_ras_top_k_to_the_codebook(value, o
     else:
         with pytest.raises(ValueError, match="power of two"):
             max_top_k(config, 4096)
+
+
+def test_npu_device_selects_ascend_model_state(monkeypatch):
+    sentinel = object()
+    monkeypatch.setattr(ms, "NPUFishOmniModelState", lambda *args, **kwargs: sentinel)
+    assert ms.create_fish_omni_model_state(None, None, None, SimpleNamespace(type="npu")) is sentinel
+
+
+def test_cuda_device_keeps_the_upstream_model_state(monkeypatch):
+    monkeypatch.setattr(ms.FishOmniModelState, "__init__", lambda self, *args, **kwargs: None)
+    state = ms.create_fish_omni_model_state(None, None, None, SimpleNamespace(type="cuda"))
+    assert type(state) is ms.FishOmniModelState
+    assert not getattr(state, "uses_ascend_attn_metadata", False)
+
+
+def test_sampling_noise_is_broadcast_across_tensor_parallel_ranks(make_state):
+    state = make_state()
+    state.add_request(0, _request("s", seed=1))
+    seen = {}
+
+    def broadcast(tensor, src=0):
+        seen["src"] = src
+        seen["shape"] = tuple(tensor.shape)
+        return tensor
+
+    with (
+        patch.object(ms, "_broadcast_tp_tensor", side_effect=lambda tensor: seen.update(called=True) or None),
+    ):
+        state._draw_noise(["s"], np.array([1]), np.array([True]))
+    assert seen["called"] is True
+
+    with (
+        patch("vllm.distributed.parallel_state.model_parallel_is_initialized", return_value=True),
+        patch("vllm.distributed.parallel_state.get_tensor_model_parallel_world_size", return_value=2),
+        patch("vllm.distributed.parallel_state.get_tp_group") as group,
+    ):
+        group.return_value.broadcast = broadcast
+        ms._broadcast_tp_tensor(state.buffers.noise)
+    assert seen["src"] == 0
+    assert seen["shape"] == tuple(state.buffers.noise.shape)
