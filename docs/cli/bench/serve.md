@@ -377,7 +377,9 @@ clipping. The dataset pads each instruction to the clip length, so the overlay k
 the original timestamps. Use `soundtrack` for samples that depend on what is said
 or heard in the clip, such as the word-repetition prompts in
 `PR_post_event_reminder` and `RTD_Omni`; a clip without an audio track keeps the
-instruction alone. The standalone `generate` command accepts the same choice as `--mix`. Each session decodes its media in a
+instruction alone. The standalone `generate` command accepts the same choice as `--mix`.
+
+Each session decodes its media in a
 worker thread after acquiring a concurrency slot, and releases the decoded input
 when the request finishes. `--max-concurrency` therefore bounds the number of
 decoded clips held in memory; the reference audio is encoded once and shared.
