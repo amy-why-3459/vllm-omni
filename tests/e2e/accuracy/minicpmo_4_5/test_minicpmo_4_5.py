@@ -7,11 +7,11 @@ Daily-Omni settings follow the MiniCPM interleaved AV recipe that reaches
 text modalities, and server ``--interleave-mm-strings`` + 1fps / 128-frame
 media-io kwargs, also pinned in ``minicpmo_4_5.yaml``).
 
-Seed-TTS WER and speaker similarity (SIM) are gated over
+Seed-TTS WER, speaker similarity (SIM), and UTMOS are gated over
 ``/v1/chat/completions`` (whole-utterance TTS) on the duplex deploy config,
 once with the stock Code2Wav and once with its bfloat16 attention cache.
-UTMOS is implemented in the same scorer but is not gated: the runs below left
-``SEED_TTS_UTMOS_EVAL`` off, so there is no measured MOS to set a floor from.
+UTMOS uses the CUDA-only ``balacoon/utmos`` graph, so the MOS floor is applied
+on CUDA and skipped on NPU.
 The native per-unit full-duplex path is not gated here: the checkpoint's own
 per-unit boundaries split words across Talker conditions, so that path scores
 ~0.075 WER on this benchmark (the HF ``MiniCPMODuplex`` reference scores
@@ -35,6 +35,7 @@ from tests.e2e.accuracy.qwen3_omni.qwen3_omni_acc_bench_core import (
 from tests.helpers.mark import hardware_test
 from tests.helpers.runtime import OmniServerParams
 from tests.helpers.stage_config import get_deploy_config_path, modify_stage_config
+from vllm_omni.platforms import current_omni_platform
 
 _MODEL = os.environ.get("VLLM_TEST_MINICPMO_4_5_MODEL", "openbmb/MiniCPM-o-4_5")
 _DEPLOY_CONFIG = get_deploy_config_path("minicpmo_4_5.yaml")
@@ -60,12 +61,14 @@ _RESULT_DIR = Path(
 # >=1pp real accuracy regression.
 _MIN_DAILY_OMNI_ACCURACY = 0.77
 _MAX_SEED_TTS_MEAN_WER = 0.05
-# One full English Seed-TTS run (1088 utterances, 2026-10-08) scored mean SIM
-# 0.865 (median 0.869) with mean WER 0.021. Three 32-utterance checks on
-# 2026-10-06 scored 0.855, 0.855, and 0.856. That artifact does not record
-# hardware or revision, and NPU was not measured separately. 0.80 is 0.055
-# below the lowest of those scores.
+# English Seed-TTS, 1088 utterances. 2026-10-08 mean SIM 0.865 (median 0.869),
+# WER 0.021. 2026-10-20 L20X stock and bfloat16-cache runs scored SIM 0.8655
+# and 0.8652, UTMOS 3.3684 and 3.3685, WER 0.0211 and 0.0214. Three 32-utterance
+# checks on 2026-10-06 scored SIM 0.855, 0.855, and 0.856. 0.80 is 0.055
+# below the lowest SIM. UTMOS 3.10 is 0.268 below the L20X means. The UTMOS
+# JIT requires CUDA, so that floor is not applied on NPU.
 _MIN_SEED_TTS_MEAN_SIM = 0.80
+_MIN_SEED_TTS_MEAN_UTMOS = 3.10
 # Match the validated Daily-Omni client body from daily_omni_bench.sh.
 _DAILY_EXTRA_BODY = {
     "modalities": ["text"],
@@ -209,6 +212,8 @@ def _run_seed_tts_wer_bench(omni_server) -> None:
             "--trust-remote-code",
         ]
     )
+    if current_omni_platform.is_cuda():
+        argv.extend(["--min-seed-tts-mean-utmos", str(_MIN_SEED_TTS_MEAN_UTMOS)])
 
     assert _acc_bench.run_acc_benchmark(_acc_bench.parse_acc_benchmark_args(argv)) == 0
 
