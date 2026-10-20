@@ -218,6 +218,33 @@ def read_audio_pcm16(path: str | Path) -> bytes:
         raise
 
 
+def read_soundtrack_pcm16(path: str | Path) -> bytes:
+    """Decode a clip's own audio track to 16 kHz mono PCM16; empty when it has none."""
+    import av
+
+    try:
+        with av.open(str(path)) as container:
+            if not container.streams.audio:
+                return b""
+    except (OSError, ValueError) as exc:
+        logger.warning("Failed to open %s for its audio track: %s", path, exc)
+        raise
+    return read_audio_pcm16(path)
+
+
+def mix_pcm16(*tracks: bytes) -> bytes:
+    """Sum PCM16 tracks sample by sample, padding to the longest and clipping to int16."""
+    import numpy as np
+
+    arrays = [np.frombuffer(track[: len(track) // 2 * 2], dtype=np.int16) for track in tracks if track]
+    if not arrays:
+        return b""
+    mixed = np.zeros(max(len(array) for array in arrays), dtype=np.int32)
+    for array in arrays:
+        mixed[: len(array)] += array
+    return np.clip(mixed, -32768, 32767).astype(np.int16).tobytes()
+
+
 def iter_av_units(
     audio_pcm16: bytes, frames: Iterator[tuple[float, bytes]], *, unit_ms: int = 1000
 ) -> Iterator[tuple[bytes, bytes | None]]:

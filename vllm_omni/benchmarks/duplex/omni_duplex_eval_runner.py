@@ -48,10 +48,22 @@ if TYPE_CHECKING:
     from vllm_omni.clients.duplex import EventCollector
 
 from .omni_duplex_eval_clock import extract_timed_sentences
-from .omni_duplex_eval_media import iter_av_units, iter_jpegs, materialize_media, read_audio_pcm16, video_duration
+from .omni_duplex_eval_media import (
+    iter_av_units,
+    iter_jpegs,
+    materialize_media,
+    mix_pcm16,
+    read_audio_pcm16,
+    read_soundtrack_pcm16,
+    video_duration,
+)
 
 #: MiniCPM-o's native duplex system prompt, the historical default.
 DEFAULT_INSTRUCTIONS = "Streaming Omni Conversation."
+#: Session audio: the instruction alone, or the instruction over the clip's own audio track.
+MIX_QUESTION = "question"
+MIX_SOUNDTRACK = "soundtrack"
+MIX_MODES = (MIX_QUESTION, MIX_SOUNDTRACK)
 _SERVER_TURN_SETTLE_S = 2.0
 
 
@@ -92,23 +104,37 @@ class PreparedSample:
     duration: float
     ref_audio: str | None = field(repr=False)
     ref_audio_sha256: str | None
+    mix: str = MIX_QUESTION
 
 
 def prepare_sample(
-    sample: DuplexSample, *, media_dir: Path, ref_audio: str | Path | PreparedReferenceAudio | None, fps: float
+    sample: DuplexSample,
+    *,
+    media_dir: Path,
+    ref_audio: str | Path | PreparedReferenceAudio | None,
+    fps: float,
+    mix: str = MIX_QUESTION,
 ) -> PreparedSample:
+    if mix not in MIX_MODES:
+        raise ValueError(f"mix must be one of {MIX_MODES}")
     audio_path = materialize_media(sample.question_audio, media_dir, f"{sample.id}_question", ".wav")
     video_path = materialize_media(sample.video, media_dir, sample.id, ".mp4")
     duration = sample.video_duration or video_duration(video_path)
     reference = ref_audio
     if isinstance(reference, str | Path):
         reference = PreparedReferenceAudio.from_path(reference)
+    pcm = read_audio_pcm16(audio_path)
+    if mix == MIX_SOUNDTRACK:
+        # The dataset's question audio is padded to the clip length so it can
+        # be overlaid on the clip's own audio at the original timestamps.
+        pcm = mix_pcm16(pcm, read_soundtrack_pcm16(video_path))
     return PreparedSample(
-        pcm=read_audio_pcm16(audio_path),
+        pcm=pcm,
         frames=tuple(iter_jpegs(video_path, fps=fps, duration=duration)),
         duration=duration,
         ref_audio=reference.data_url if reference is not None else None,
         ref_audio_sha256=reference.sha256 if reference is not None else None,
+        mix=mix,
     )
 
 
@@ -180,7 +206,7 @@ async def generate_sample(
     ref_audio: str | Path | PreparedReferenceAudio | None,
     output_root: str | Path,
     fps: float = 1.0,
-    mix: str = "question",
+    mix: str = MIX_QUESTION,
     pace: str = "realtime",
     clock: str = "media",
     overwrite: bool = False,
@@ -210,15 +236,17 @@ async def generate_sample(
     output = Path(output_root) / sample.split / f"{sample.id}.json"
     if not defer_artifacts and output.exists() and not overwrite:
         return GenerateSampleResult(output=output)
-    if mix != "question":
-        raise NotImplementedError("v1 supports mix=question; soundtrack mixing is reserved for P1")
+    if mix not in MIX_MODES:
+        raise ValueError(f"mix must be one of {MIX_MODES}")
+    if prepared is not None and prepared.mix != mix:
+        raise ValueError(f"prepared input uses mix={prepared.mix!r}, not {mix!r}")
     if server_turns:
         unit_ms = SERVER_VAD_FRAME_MS
     if prepared is None:
         # Standalone generation shares its loop with other live sessions;
         # decoding a whole clip must not pause their input or playback ACKs.
         prepared = await asyncio.to_thread(
-            prepare_sample, sample, media_dir=output.parent / ".media", ref_audio=ref_audio, fps=fps
+            prepare_sample, sample, media_dir=output.parent / ".media", ref_audio=ref_audio, fps=fps, mix=mix
         )
     pcm = prepared.pcm
     if server_turns:

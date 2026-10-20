@@ -370,7 +370,14 @@ sample can contain a single user statement, so a blanket two-response minimum is
 not valid. Deterministic CPU tests cover adjacent speech boundaries separately.
 
 Inputs retain the standalone runner's real-time pacing, question audio, media
-clock and 1 FPS default (`--duplex-eval-fps`). Each session decodes its media in a
+clock and 1 FPS default (`--duplex-eval-fps`). `--duplex-eval-mix` selects the
+session audio: `question` (default) streams only the instruction audio, while
+`soundtrack` sums it with the clip's own audio track, sample by sample with int16
+clipping. The dataset pads each instruction to the clip length, so the overlay keeps
+the original timestamps. Use `soundtrack` for samples that depend on what is said
+or heard in the clip, such as the word-repetition prompts in
+`PR_post_event_reminder` and `RTD_Omni`; a clip without an audio track keeps the
+instruction alone. The standalone `generate` command accepts the same choice as `--mix`. Each session decodes its media in a
 worker thread after acquiring a concurrency slot, and releases the decoded input
 when the request finishes. `--max-concurrency` therefore bounds the number of
 decoded clips held in memory; the reference audio is encoded once and shared.

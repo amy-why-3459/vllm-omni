@@ -17,7 +17,9 @@ from vllm_omni.benchmarks.duplex.omni_duplex_eval_media import (
     _video_thread_type,
     extract_jpeg,
     materialize_media,
+    mix_pcm16,
     read_audio_pcm16,
+    read_soundtrack_pcm16,
     video_duration,
 )
 
@@ -277,6 +279,76 @@ class TestReadAudioPcm16:
         broken.write_bytes(b"\x00\x00\x00\x00")
         with pytest.raises((OSError, ValueError)):
             read_audio_pcm16(broken)
+
+
+def _make_synthetic_mp4_with_audio(duration: float = 1.0, fps: int = 10, sample_rate: int = 16000) -> bytes:
+    """Return an MP4 byte blob carrying a video stream and a 440 Hz AAC track."""
+    buf = io.BytesIO()
+    with av.open(buf, mode="w", format="mp4") as container:
+        video = container.add_stream("mpeg4", rate=fps)
+        video.width = 64
+        video.height = 64
+        video.pix_fmt = "yuv420p"
+        audio = container.add_stream("aac", rate=sample_rate, layout="mono")
+        for i in range(int(duration * fps)):
+            frame = av.VideoFrame.from_ndarray(np.full((64, 64, 3), i * 16 % 256, dtype=np.uint8), format="rgb24")
+            for pkt in video.encode(frame):
+                container.mux(pkt)
+        n = int(sample_rate * duration)
+        samples = (np.sin(2 * np.pi * 440 * np.arange(n) / sample_rate) * 0.3).astype(np.float32)
+        frame_size = audio.codec_context.frame_size or 1024
+        for start in range(0, n, frame_size):
+            chunk = samples[start : start + frame_size]
+            frame = av.AudioFrame.from_ndarray(chunk[np.newaxis, :], format="fltp", layout="mono")
+            frame.sample_rate = sample_rate
+            frame.pts = start
+            for pkt in audio.encode(frame):
+                container.mux(pkt)
+        for stream in (video, audio):
+            for pkt in stream.encode():
+                container.mux(pkt)
+    return buf.getvalue()
+
+
+class TestReadSoundtrackPcm16:
+    @staticmethod
+    def test_decodes_clip_audio_track(tmp_path: Path) -> None:
+        path = tmp_path / "clip.mp4"
+        path.write_bytes(_make_synthetic_mp4_with_audio(duration=1.0))
+        pcm = np.frombuffer(read_soundtrack_pcm16(path), dtype=np.int16)
+        assert abs(len(pcm) - 16000) <= 2048
+        assert np.abs(pcm).max() > 1000
+
+    @staticmethod
+    def test_clip_without_audio_is_empty(tmp_path: Path) -> None:
+        path = tmp_path / "silent.mp4"
+        path.write_bytes(_make_synthetic_mp4(duration=0.5))
+        assert read_soundtrack_pcm16(path) == b""
+
+    @staticmethod
+    def test_raises_for_broken_file(tmp_path: Path) -> None:
+        broken = tmp_path / "broken.mp4"
+        broken.write_bytes(b"\x00\x00\x00\x00")
+        with pytest.raises((OSError, ValueError)):
+            read_soundtrack_pcm16(broken)
+
+
+class TestMixPcm16:
+    @staticmethod
+    def _pcm(*values: int) -> bytes:
+        return np.array(values, dtype=np.int16).tobytes()
+
+    def test_sums_and_pads_to_longest(self) -> None:
+        mixed = mix_pcm16(self._pcm(100, -200, 300), self._pcm(1, 2))
+        assert np.frombuffer(mixed, dtype=np.int16).tolist() == [101, -198, 300]
+
+    def test_clips_to_int16(self) -> None:
+        mixed = mix_pcm16(self._pcm(30000, -30000), self._pcm(10000, -10000))
+        assert np.frombuffer(mixed, dtype=np.int16).tolist() == [32767, -32768]
+
+    def test_empty_tracks_are_ignored(self) -> None:
+        assert mix_pcm16(self._pcm(5, 6), b"") == self._pcm(5, 6)
+        assert mix_pcm16(b"", b"") == b""
 
 
 # ---------------------------------------------------------------------------
