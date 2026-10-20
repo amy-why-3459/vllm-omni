@@ -238,6 +238,24 @@ def test_seed_tts_design_dataset_rejects_missing_description(seed_tts_design_roo
         assert req.seed_tts_utterance_id == "ok"
 
 
+def test_utmos_visible_cuda_uses_requested_ordinal_inside_parent_mask():
+    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _resolve_utmos_visible_cuda
+
+    # Nightly accuracy keeps the server on the first visible card and scores on the second.
+    assert _resolve_utmos_visible_cuda("cuda:1", "cuda:1", "0,1") == "1"
+    assert _resolve_utmos_visible_cuda("", "cuda:1", "4,5") == "5"
+    assert _resolve_utmos_visible_cuda("cuda:0", "npu:1", "") == "0"
+
+
+def test_utmos_visible_cuda_rejects_cpu_and_out_of_range():
+    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _resolve_utmos_visible_cuda
+
+    with pytest.raises(ValueError, match="hardcodes cuda:0"):
+        _resolve_utmos_visible_cuda("cpu", "cuda:1", "0,1")
+    with pytest.raises(ValueError, match="outside CUDA_VISIBLE_DEVICES"):
+        _resolve_utmos_visible_cuda("cuda:2", "", "0,1")
+
+
 @pytest.mark.parametrize("audio_seconds", [0.1, 61])
 def test_seed_tts_whisper_transcribe_passes_attention_mask(monkeypatch, audio_seconds):
     from vllm_omni.benchmarks.data_modules import seed_tts_eval

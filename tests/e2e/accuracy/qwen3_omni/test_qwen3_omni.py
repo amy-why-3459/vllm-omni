@@ -127,7 +127,10 @@ def test_qwen3_omni_daily_omni_accuracy_bench(omni_server) -> None:
 def test_qwen3_omni_seed_tts_wer_bench(omni_server) -> None:
     _require_vllm_cli()
     pytest.importorskip("huggingface_hub")
-    ns = _acc_bench.parse_acc_benchmark_args(
-        build_acc_benchmark_cli_argv(omni_server, skip_seed=False, skip_daily=True)
-    )
+    # Checked-in English Seed-TTS runs scored mean WER 0.217 and 0.223.
+    # SIM and UTMOS were not computed on those runs, so this job keeps the
+    # existing 0.35 WER ceiling and does not invent floors for the other two.
+    argv = build_acc_benchmark_cli_argv(omni_server, skip_seed=False, skip_daily=True)
+    argv.extend(["--max-seed-tts-mean-wer", "0.35"])
+    ns = _acc_bench.parse_acc_benchmark_args(argv)
     assert _acc_bench.run_acc_benchmark(ns) == 0

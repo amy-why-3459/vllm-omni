@@ -83,6 +83,7 @@ steps:
           # KV cache, so Whisper OOMs on `.to(device)` and every clip reports
           # "ASR / WER failed".
           - export SEED_TTS_WER_EVAL=1
+          - export SEED_TTS_SIM_EVAL=1
           - export SEED_TTS_EVAL_DEVICE=npu:1
           - |
             set +e

@@ -7,12 +7,15 @@ Daily-Omni settings follow the MiniCPM interleaved AV recipe that reaches
 text modalities, and server ``--interleave-mm-strings`` + 1fps / 128-frame
 media-io kwargs, also pinned in ``minicpmo_4_5.yaml``).
 
-Seed-TTS WER is gated over ``/v1/chat/completions`` (whole-utterance TTS) on
-the duplex deploy config, once with the stock Code2Wav and once with its
-bfloat16 attention cache. The native per-unit full-duplex path is not WER
-gated here: the checkpoint's own per-unit boundaries split words across
-Talker conditions, so that path scores ~0.075 on this benchmark (the HF
-``MiniCPMODuplex`` reference scores ~0.14) and cannot meet the 0.05 gate.
+Seed-TTS WER and speaker similarity (SIM) are gated over
+``/v1/chat/completions`` (whole-utterance TTS) on the duplex deploy config,
+once with the stock Code2Wav and once with its bfloat16 attention cache.
+UTMOS is implemented in the same scorer but is not gated: the runs below left
+``SEED_TTS_UTMOS_EVAL`` off, so there is no measured MOS to set a floor from.
+The native per-unit full-duplex path is not gated here: the checkpoint's own
+per-unit boundaries split words across Talker conditions, so that path scores
+~0.075 WER on this benchmark (the HF ``MiniCPMODuplex`` reference scores
+~0.14) and cannot meet the 0.05 WER gate.
 """
 
 from __future__ import annotations
@@ -57,6 +60,12 @@ _RESULT_DIR = Path(
 # >=1pp real accuracy regression.
 _MIN_DAILY_OMNI_ACCURACY = 0.77
 _MAX_SEED_TTS_MEAN_WER = 0.05
+# One full English Seed-TTS run (1088 utterances, 2026-10-08) scored mean SIM
+# 0.865 (median 0.869) with mean WER 0.021. Three 32-utterance checks on
+# 2026-10-06 scored 0.855, 0.855, and 0.856. That artifact does not record
+# hardware or revision, and NPU was not measured separately. 0.80 is 0.055
+# below the lowest of those scores.
+_MIN_SEED_TTS_MEAN_SIM = 0.80
 # Match the validated Daily-Omni client body from daily_omni_bench.sh.
 _DAILY_EXTRA_BODY = {
     "modalities": ["text"],
@@ -193,6 +202,8 @@ def _run_seed_tts_wer_bench(omni_server) -> None:
             str(_RESULT_DIR),
             "--max-seed-tts-mean-wer",
             str(_MAX_SEED_TTS_MEAN_WER),
+            "--min-seed-tts-mean-sim",
+            str(_MIN_SEED_TTS_MEAN_SIM),
             "--seed-extra-body-json",
             json.dumps(_SEED_EXTRA_BODY, separators=(",", ":")),
             "--trust-remote-code",
