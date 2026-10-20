@@ -25,10 +25,10 @@ https://github.com/zhaochenyang20/seed-tts-eval):
   (Sarulab-style demo export). Uses ``torch`` + ``huggingface_hub`` only. Aggregate metrics
   are over **all requests with captured PCM** (independent of ASR/WER). Non-finite scores are
   dropped and counted as failures. Override repo/file via ``SEED_TTS_UTMOS_HF_REPO`` /
-  ``SEED_TTS_UTMOS_JIT_FILE``. The exported graph hardcodes ``cuda:0``, so CPU and any other
-  CUDA ordinal fail inside the traced forward. The scorer therefore runs in a child process
-  whose only visible GPU is the requested card, making that card ``cuda:0`` in the child.
-  Set ``SEED_TTS_UTMOS_DEVICE=cuda:N``. When it is unset, a ``cuda:N``
+  ``SEED_TTS_UTMOS_JIT_FILE``. The exported graph hardcodes ``cuda:0`` in 14 device
+  constants. After load, those constants are rewritten to the requested ``cuda:N`` or
+  ``npu:N`` so the same checkpoint runs on either accelerator. Set
+  ``SEED_TTS_UTMOS_DEVICE``. When it is unset, a ``cuda:N`` or ``npu:N``
   ``SEED_TTS_EVAL_DEVICE`` is reused; otherwise the scorer uses ``cuda:0``.
   Forward uses **float32** waveform in ``[-1, 1]`` (same as the WER resampled array) so
   tensor dtypes match JIT weights; using int16 triggers
@@ -51,15 +51,12 @@ does not send them.
 
 from __future__ import annotations
 
-import atexit
 import io
 import logging
+import math
 import os
 import statistics
 import string
-import struct
-import subprocess
-import sys
 import tempfile
 import threading
 import wave
@@ -73,8 +70,6 @@ from vllm.benchmarks.datasets import SampleRequest
 
 from vllm_omni.benchmarks.data_modules.seed_tts_dataset import SeedTTSSampleRequest
 from vllm_omni.metrics.definitions import stream_pcm_format_from_env
-
-from . import utmos_worker
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +85,8 @@ _zh_paraformer = None
 _wavlm_model = None
 _wavlm_processor = None
 _wavlm_device: str | None = None
-_utmos_worker: _UTMOSWorker | None = None
+_utmos_model: Any | None = None
+_utmos_device: str | None = None
 _utmos_jit_load_failed = False
 _utmos_forward_warned = False
 
@@ -329,171 +325,125 @@ def _cosine_similarity_unit_vectors(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b))
 
 
-def _resolve_utmos_visible_cuda(utmos_device: str, eval_device: str, parent_visible: str | None) -> str:
-    """Physical CUDA id whose child-process view is ``cuda:0``.
+def _parse_utmos_accelerator(requested: str) -> tuple[str, int]:
+    """Return ``("cuda"|"npu", index)`` for a scorer device string."""
+    lowered = requested.strip().lower()
+    for kind in ("cuda", "npu"):
+        if lowered == kind:
+            return kind, 0
+        prefix = f"{kind}:"
+        if not lowered.startswith(prefix):
+            continue
+        try:
+            index = int(lowered.split(":", 1)[1])
+        except ValueError as exc:
+            raise ValueError(f"Unsupported UTMOS device {requested!r}. Use cuda:N or npu:N.") from exc
+        if index < 0:
+            raise ValueError(f"Unsupported UTMOS device {requested!r}. Use cuda:N or npu:N.")
+        return kind, index
+    raise ValueError(f"UTMOS JIT cannot run on {requested!r}. Set SEED_TTS_UTMOS_DEVICE to cuda:N or npu:N.")
 
-    ``balacoon/utmos`` traces ``torch.device("cuda:0")`` into the graph. Loading the
-    weights on another ordinal, or on CPU, still executes that baked ``.to(cuda:0)``
-    and then fails the convolution. A child with ``CUDA_VISIBLE_DEVICES`` set to the
-    returned id makes the requested card the graph's ``cuda:0``.
 
-    ``parent_visible=None`` means the parent left ``CUDA_VISIBLE_DEVICES`` unset, so
-    logical ids are physical ids. An explicitly empty mask hides every GPU; the
-    child must not replace that with ``0``.
+def _resolve_utmos_device(utmos_device: str, eval_device: str, cuda_visible: str | None) -> str:
+    """Device string for the in-process UTMOS module.
+
+    The exported graph hardcodes ``cuda:0``. ``_retarget_utmos_jit_devices`` rewrites
+    those constants onto this device after load, so CUDA and NPU share one checkpoint.
+    ``cuda_visible=None`` means ``CUDA_VISIBLE_DEVICES`` is unset. An explicit empty
+    mask hides every CUDA device and is rejected for a CUDA target; an NPU target
+    does not consult that mask.
     """
     requested = utmos_device.strip()
-    if not requested and eval_device.strip().lower().startswith("cuda"):
-        requested = eval_device.strip()
+    if not requested:
+        eval_text = eval_device.strip()
+        eval_lower = eval_text.lower()
+        if eval_lower.startswith("cuda") or eval_lower.startswith("npu"):
+            requested = eval_text
     if not requested:
         requested = "cuda:0"
-    lowered = requested.lower()
-    if lowered == "cuda":
-        logical = 0
-    elif lowered.startswith("cuda:"):
-        try:
-            logical = int(lowered.split(":", 1)[1])
-        except ValueError as exc:
-            raise ValueError(f"Unsupported UTMOS device {requested!r}. Use cuda:N.") from exc
-    else:
-        raise ValueError(
-            f"UTMOS JIT cannot run on {requested!r}; its graph hardcodes cuda:0. Set SEED_TTS_UTMOS_DEVICE=cuda:N."
-        )
-    if logical < 0:
-        raise ValueError(f"Unsupported UTMOS device {requested!r}. Use cuda:N.")
-    if parent_visible is None:
-        return str(logical)
-    tokens = [part.strip() for part in parent_visible.split(",") if part.strip()]
+    kind, index = _parse_utmos_accelerator(requested)
+    if kind == "npu":
+        return f"npu:{index}"
+    if cuda_visible is None:
+        return f"cuda:{index}"
+    tokens = [part.strip() for part in cuda_visible.split(",") if part.strip()]
     if not tokens:
         raise ValueError(
             "CUDA_VISIBLE_DEVICES is set but empty, so UTMOS cannot select a GPU. "
             "Unset it or list the physical ids the scorer may use."
         )
-    if logical >= len(tokens):
-        raise ValueError(f"CUDA device cuda:{logical} is outside CUDA_VISIBLE_DEVICES={parent_visible!r}.")
-    return tokens[logical]
+    if index >= len(tokens):
+        raise ValueError(f"CUDA device cuda:{index} is outside CUDA_VISIBLE_DEVICES={cuda_visible!r}.")
+    return f"cuda:{index}"
 
 
-def _read_exact(stream: Any, count: int) -> bytes:
-    buffer = bytearray()
-    while len(buffer) < count:
-        chunk = stream.read(count - len(buffer))
-        if not chunk:
-            raise EOFError
-        buffer.extend(chunk)
-    return bytes(buffer)
+def _retarget_utmos_jit_devices(module: Any, device: str) -> int:
+    """Rewrite baked ``cuda:0`` device constants onto ``device``.
 
+    ``balacoon/utmos`` traces ``prim::Constant[value="cuda:0"]`` into the root
+    forward, the WavLM attention layers, and the output RNN. The attribute is a
+    device string (``node.s``), not a CUDA kernel, so the same graph runs after
+    the constants move to ``cuda:N`` or ``npu:N``.
+    """
 
-class _UTMOSWorker:
-    """One long-lived scorer process. ``CUDA_VISIBLE_DEVICES`` is set before it starts."""
+    def _walk_graph(graph: Any) -> int:
+        changed = 0
+        for node in graph.nodes():
+            if node.kind() == "prim::Constant" and "cuda:0" in str(node):
+                node.s_("value", device)
+                changed += 1
+            for block in node.blocks():
+                changed += _walk_graph(block)
+        return changed
 
-    def __init__(self, visible_cuda: str, jit_path: str) -> None:
-        env = os.environ.copy()
-        env["CUDA_VISIBLE_DEVICES"] = visible_cuda
-        self._proc = subprocess.Popen(
-            [sys.executable, utmos_worker.__file__, jit_path],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            env=env,
-        )
-        self._closed = False
-        kind, payload = self._receive(timeout_s=180)
-        if kind != "ready":
-            self.close()
-            raise RuntimeError(payload or "UTMOS worker failed to start")
-
-    def score(self, wav: np.ndarray) -> float | None:
-        if self._closed or self._proc.poll() is not None:
-            raise RuntimeError(f"UTMOS worker is not running (exitcode={self._proc.poll()}).")
-        assert self._proc.stdin is not None
-        audio = np.ascontiguousarray(wav, dtype=np.float32)
-        self._proc.stdin.write(struct.pack("<I", audio.size))
-        self._proc.stdin.write(audio.tobytes())
-        self._proc.stdin.flush()
-        kind, payload = self._receive(timeout_s=180)
-        if kind == "err":
-            raise RuntimeError(payload)
-        return payload
-
-    def _receive(self, *, timeout_s: float) -> tuple[str, Any]:
-        holder: dict[str, Any] = {}
-
-        def _read() -> None:
-            try:
-                assert self._proc.stdout is not None
-                tag = self._proc.stdout.read(1)
-                if tag == b"R":
-                    holder["msg"] = ("ready", None)
-                elif tag == b"Z":
-                    holder["msg"] = ("ok", None)
-                elif tag == b"S":
-                    (value,) = struct.unpack("<d", _read_exact(self._proc.stdout, 8))
-                    holder["msg"] = ("ok", value)
-                elif tag == b"E":
-                    (length,) = struct.unpack("<I", _read_exact(self._proc.stdout, 4))
-                    holder["msg"] = ("err", _read_exact(self._proc.stdout, length).decode("utf-8", errors="replace"))
-                elif tag == b"":
-                    holder["exc"] = EOFError("UTMOS worker closed stdout")
-                else:
-                    holder["exc"] = RuntimeError(f"unexpected UTMOS worker tag {tag!r}")
-            except Exception as exc:
-                holder["exc"] = exc
-
-        reader = threading.Thread(target=_read, name="utmos-worker-read", daemon=True)
-        reader.start()
-        reader.join(timeout_s)
-        if reader.is_alive():
-            self.close()
-            raise TimeoutError(f"UTMOS worker timed out after {timeout_s:.0f}s")
-        if "exc" in holder:
-            self.close()
-            raise RuntimeError(f"UTMOS worker output failed: {holder['exc']}")
-        kind, payload = holder["msg"]
-        return kind, payload
-
-    def close(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        if self._proc.poll() is None and self._proc.stdin is not None:
-            try:
-                self._proc.stdin.write(struct.pack("<I", 0xFFFFFFFF))
-                self._proc.stdin.flush()
-            except Exception:
-                logger.debug("UTMOS worker shutdown signal failed", exc_info=True)
+    def _walk_module(current: Any) -> int:
+        total = 0
         try:
-            self._proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self._proc.kill()
-            self._proc.wait(timeout=5)
-        if self._proc.stdin is not None:
-            self._proc.stdin.close()
-        if self._proc.stdout is not None:
-            self._proc.stdout.close()
+            methods = list(current._c._method_names())
+        except Exception:
+            methods = []
+        for method in methods:
+            try:
+                graph = current._c._get_method(method).graph
+            except Exception:
+                continue
+            total += _walk_graph(graph)
+        for child in current.children():
+            total += _walk_module(child)
+        return total
+
+    return _walk_module(module)
 
 
-def _close_utmos_worker() -> None:
-    global _utmos_worker
-    worker = _utmos_worker
-    _utmos_worker = None
-    if worker is not None:
-        worker.close()
+def _load_utmos_jit(path: str, device: str) -> Any:
+    """Load UTMOS on ``device`` and retarget the traced ``cuda:0`` constants."""
+    if device.startswith("npu"):
+        import torch_npu  # noqa: F401
+    import torch
+
+    model = torch.jit.load(path, map_location=device)
+    model.eval()
+    rewritten = _retarget_utmos_jit_devices(model, device)
+    if rewritten == 0:
+        raise RuntimeError(f"UTMOS graph has no cuda:0 device constants to retarget onto {device}.")
+    warmup = torch.zeros(1, 16000, dtype=torch.float32, device=device)
+    with torch.no_grad():
+        model(warmup)
+    return model
 
 
-atexit.register(_close_utmos_worker)
-
-
-def _ensure_utmos_jit_model() -> _UTMOSWorker | None:
-    """Start the isolated UTMOS process once. The JIT graph cannot leave ``cuda:0``."""
-    global _utmos_worker, _utmos_jit_load_failed
+def _ensure_utmos_jit_model() -> Any | None:
+    """Load the UTMOS JIT once on the resolved CUDA or NPU device."""
+    global _utmos_model, _utmos_device, _utmos_jit_load_failed
     with _lock:
         if _utmos_jit_load_failed:
             return None
-        if _utmos_worker is not None:
-            return _utmos_worker
+        if _utmos_model is not None:
+            return _utmos_model
         try:
             from vllm_omni.transformers_utils.repo_utils import hf_api
 
-            visible = _resolve_utmos_visible_cuda(
+            device = _resolve_utmos_device(
                 os.environ.get("SEED_TTS_UTMOS_DEVICE", ""),
                 os.environ.get("SEED_TTS_EVAL_DEVICE", ""),
                 os.environ.get("CUDA_VISIBLE_DEVICES"),
@@ -501,38 +451,47 @@ def _ensure_utmos_jit_model() -> _UTMOSWorker | None:
             repo = os.environ.get("SEED_TTS_UTMOS_HF_REPO", "balacoon/utmos").strip() or "balacoon/utmos"
             fname = os.environ.get("SEED_TTS_UTMOS_JIT_FILE", "utmos.jit").strip() or "utmos.jit"
             logger.warning(
-                "Loading UTMOS TorchScript from Hugging Face %r file %r onto physical CUDA %s "
-                "(child process exposes it as cuda:0; the traced graph hardcodes that device)...",
+                "Loading UTMOS TorchScript from Hugging Face %r file %r onto %s "
+                "(rewriting traced cuda:0 device constants)...",
                 repo,
                 fname,
-                visible,
+                device,
             )
             path = hf_api().hf_hub_download(repo_id=repo, filename=fname, repo_type="model")
-            _utmos_worker = _UTMOSWorker(visible, path)
+            _utmos_model = _load_utmos_jit(path, device)
+            _utmos_device = device
         except Exception as exc:
             logger.warning(
-                "UTMOS JIT unavailable (CUDA required; check SEED_TTS_UTMOS_DEVICE and HF access): %s",
+                "UTMOS JIT unavailable (set SEED_TTS_UTMOS_DEVICE to cuda:N or npu:N; check HF access): %s",
                 exc,
             )
             _utmos_jit_load_failed = True
             return None
-    return _utmos_worker
+    return _utmos_model
 
 
 def _utmos_predict_f32_16k(wav_f32: np.ndarray) -> float | None:
-    """MOS from the isolated JIT worker; input is float32 mono @ 16 kHz in ``[-1, 1]``.
+    """MOS from the JIT; input is float32 mono @ 16 kHz in ``[-1, 1]``.
 
     ``balacoon/utmos`` demos sometimes use int16 numpy, but the exported ``.jit`` weights are
     float32; passing int16 tensors causes: "RuntimeError: ... input type and weight type
     should be same".
     """
+    import torch
+
     if len(wav_f32) == 0:
         return None
-    worker = _ensure_utmos_jit_model()
-    if worker is None:
+    model = _ensure_utmos_jit_model()
+    if model is None or _utmos_device is None:
         return None
-    scored = worker.score(np.ascontiguousarray(wav_f32, dtype=np.float32))
-    return scored
+    audio = torch.from_numpy(np.ascontiguousarray(wav_f32, dtype=np.float32).copy()).unsqueeze(0)
+    audio = audio.to(device=_utmos_device, dtype=torch.float32)
+    with torch.no_grad():
+        out = model(audio)
+    value = float(out.reshape(-1)[0].item())
+    if not math.isfinite(value):
+        return None
+    return value
 
 
 def _ensure_en_asr() -> None:

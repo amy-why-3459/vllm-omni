@@ -10,8 +10,8 @@ media-io kwargs, also pinned in ``minicpmo_4_5.yaml``).
 Seed-TTS WER, speaker similarity (SIM), and UTMOS are gated over
 ``/v1/chat/completions`` (whole-utterance TTS) on the duplex deploy config,
 once with the stock Code2Wav and once with its bfloat16 attention cache.
-UTMOS uses the CUDA-only ``balacoon/utmos`` graph, so the MOS floor is applied
-on CUDA and skipped on NPU.
+The UTMOS checkpoint is retargeted onto CUDA or NPU. The numeric MOS floor
+is applied on CUDA and skipped on NPU until an A3 run measures one.
 The native per-unit full-duplex path is not gated here: the checkpoint's own
 per-unit boundaries split words across Talker conditions, so that path scores
 ~0.075 WER on this benchmark (the HF ``MiniCPMODuplex`` reference scores
@@ -65,8 +65,8 @@ _MAX_SEED_TTS_MEAN_WER = 0.05
 # WER 0.021. 2026-10-20 L20X stock and bfloat16-cache runs scored SIM 0.8655
 # and 0.8652, UTMOS 3.3684 and 3.3685, WER 0.0211 and 0.0214. Three 32-utterance
 # checks on 2026-10-06 scored SIM 0.855, 0.855, and 0.856. 0.80 is 0.055
-# below the lowest SIM. UTMOS 3.10 is 0.268 below the L20X means. The UTMOS
-# JIT requires CUDA, so that floor is not applied on NPU.
+# below the lowest SIM. UTMOS 3.10 is 0.268 below the L20X means. That floor
+# stays off NPU until an A3 run measures MOS.
 _MIN_SEED_TTS_MEAN_SIM = 0.80
 _MIN_SEED_TTS_MEAN_UTMOS = 3.10
 # Match the validated Daily-Omni client body from daily_omni_bench.sh.

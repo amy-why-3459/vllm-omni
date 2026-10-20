@@ -238,26 +238,28 @@ def test_seed_tts_design_dataset_rejects_missing_description(seed_tts_design_roo
         assert req.seed_tts_utterance_id == "ok"
 
 
-def test_utmos_visible_cuda_uses_requested_ordinal_inside_parent_mask():
-    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _resolve_utmos_visible_cuda
+def test_utmos_device_uses_visible_cuda_or_npu_ordinal():
+    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _resolve_utmos_device
 
     # Nightly accuracy keeps the server on the first visible card and scores on the second.
-    assert _resolve_utmos_visible_cuda("cuda:1", "cuda:1", "0,1") == "1"
-    assert _resolve_utmos_visible_cuda("", "cuda:1", "4,5") == "5"
-    assert _resolve_utmos_visible_cuda("cuda:0", "npu:1", None) == "0"
+    assert _resolve_utmos_device("cuda:1", "cuda:1", "0,1") == "cuda:1"
+    assert _resolve_utmos_device("", "cuda:1", "4,5") == "cuda:1"
+    assert _resolve_utmos_device("cuda:0", "npu:1", None) == "cuda:0"
+    assert _resolve_utmos_device("", "npu:1", None) == "npu:1"
+    assert _resolve_utmos_device("npu:1", "", "") == "npu:1"
 
 
-def test_utmos_visible_cuda_rejects_cpu_and_out_of_range():
-    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _resolve_utmos_visible_cuda
+def test_utmos_device_rejects_cpu_empty_mask_and_out_of_range():
+    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _resolve_utmos_device
 
-    with pytest.raises(ValueError, match="hardcodes cuda:0"):
-        _resolve_utmos_visible_cuda("cpu", "cuda:1", "0,1")
+    with pytest.raises(ValueError, match="cannot run on"):
+        _resolve_utmos_device("cpu", "cuda:1", "0,1")
     with pytest.raises(ValueError, match="outside CUDA_VISIBLE_DEVICES"):
-        _resolve_utmos_visible_cuda("cuda:2", "", "0,1")
+        _resolve_utmos_device("cuda:2", "", "0,1")
     with pytest.raises(ValueError, match="set but empty"):
-        _resolve_utmos_visible_cuda("", "", "")
+        _resolve_utmos_device("", "", "")
     with pytest.raises(ValueError, match="set but empty"):
-        _resolve_utmos_visible_cuda("cuda:0", "", " , ")
+        _resolve_utmos_device("cuda:0", "", " , ")
 
 
 @pytest.mark.parametrize("audio_seconds", [0.1, 61])
