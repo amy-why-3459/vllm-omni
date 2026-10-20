@@ -692,6 +692,48 @@ async def test_manual_vision_frames_honor_the_pending_byte_limit() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("discard", ["clear", "cancel", "promote"])
+async def test_deferred_vision_prefixes_stay_charged_until_discard(discard: str) -> None:
+    """Held VISION prefixes still count toward the pending-byte limit."""
+    frame = "a" * 40
+    h = await open_harness(
+        auto_response=False,
+        runtime_config=DuplexSessionRuntimeConfig(max_pending_input_bytes_per_session=100),
+    )
+    try:
+        await h.run(append_audio(samples=8))
+        await h.run(commands.Commit(create_response=True))
+        request_id = h.port.submissions[0].context.request_id
+        response_id = h.session.active_response_id
+        await h.deliver_and_settle(tts_output(request_id, samples=24000, text="sure"))
+        await h.run(commands.AckPlayback(response_id=response_id, played_ms=1000))
+
+        for _ in range(2):
+            await h.run(commands.AppendAudio(format="pcm_f32le", sample_rate_hz=16000, video_frames=(frame,)))
+        assert h.session.pending_input_bytes == 80
+        await h.run(commands.Commit(create_response=False))
+        assert h.session.pending_input_bytes == 80
+        assert h.runner.model_state.commit_prefix_reserved_bytes == [40]
+
+        rejected = await h.run(commands.AppendAudio(format="pcm_f32le", sample_rate_hz=16000, video_frames=(frame,)))
+        assert types(rejected) == ["error"]
+        assert rejected[0].code == "input_backpressure"
+        assert h.session.pending_input_bytes == 80
+
+        if discard == "clear":
+            await h.run(commands.ClearInput())
+        elif discard == "cancel":
+            await h.run(commands.CancelResponse())
+        else:
+            await h.deliver_and_settle(tts_output(request_id, samples=0, text="", finished=True))
+            await h.run(commands.CreateResponse())
+        assert h.session.pending_input_bytes == 0
+        assert not h.runner.model_state.commit_prefix_payloads
+    finally:
+        await close_harness(h)
+
+
+@pytest.mark.asyncio
 async def test_input_backpressure_is_rejected_before_the_buffer_is_touched() -> None:
     h = await open_harness(runtime_config=DuplexSessionRuntimeConfig(max_pending_input_bytes_per_session=1000))
     try:
@@ -1512,6 +1554,48 @@ async def test_tts_segment_end_schedules_a_silence_continuation_unit() -> None:
         assert h.runner.model_state.continuation_units == 1
         # The response stays open across the segment boundary.
         assert h.session.active_response_id is not None
+    finally:
+        await close_harness(h)
+
+
+@pytest.mark.asyncio
+async def test_speech_after_silence_continuation_is_not_the_first_audio_window() -> None:
+    """VISION then generated silence consumes the 1035 ms window.
+
+    Two buffered seconds of later speech are two normal chunks (25 slots),
+    not the single first-window unit (13).
+    """
+    h = await open_harness()
+    try:
+        await h.run(commands.AppendAudio(format="pcm_f32le", sample_rate_hz=16000, video_frames=("frame",)))
+        request_id = h.stage0_request_id()
+        await h.deliver_and_settle(tts_output(request_id, samples=24000, text="hello"))
+        await h.deliver_and_settle(
+            tts_output(request_id, samples=48000, text="hello", tts_is_last_chunk=True, finished=True)
+        )
+        assert h.runner.model_state.audio_buffer._audio_window_started is True
+        assert h.session.active_response_id is not None
+        h.session.config.overlap_policy = "barge_in_on_speech"
+
+        await h.run(
+            commands.AppendAudio(
+                audio=pcm_f32(32000),
+                format="pcm_f32le",
+                sample_rate_hz=16000,
+                is_speech=True,
+                hints={"overlap_action": "listen"},
+            )
+        )
+        assert h.runner.model_state.audio_buffer.pending_byte_count == 32000 * 4
+        before = len(h.port.submissions)
+        await h.run(commands.Commit(create_response=False))
+        if len(h.port.submissions) == before:
+            await h.deliver_and_settle(tts_output(request_id, samples=0, text="", finished=True, turn_end=True))
+        speech = h.port.submissions[before:]
+        assert len(speech) == 1
+        payload = speech[0].prompt["model_intermediate_buffer"]["duplex"]["payload"]
+        assert "first_audio_window" not in payload
+        assert len(speech[0].prompt["prompt_token_ids"]) == 25
     finally:
         await close_harness(h)
 

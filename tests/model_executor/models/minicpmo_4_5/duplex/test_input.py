@@ -347,6 +347,27 @@ def test_first_audio_after_vision_keeps_the_first_mel_window_across_rollback():
     assert later is not None and later.get("first_audio_window") is not True
 
 
+def test_accepted_silence_consumes_the_first_audio_window():
+    """A silence continuation is encoded outside the buffer.
+
+    Two buffered seconds after that are two normal chunks, not the single
+    first-window unit.
+    """
+    buffer = MiniCPMO45PcmAppendBuffer()
+    vision = buffer.prepare_append(
+        dict(pcm_payload(0, speech=False), video_frames=["frame"]),
+        operation_id="vision",
+        chunk_period_ms=1000,
+    )
+    assert vision is not None
+    vision.commit()
+    buffer.note_audio_window_started()
+
+    speech = buffer.prepare_append(pcm_payload(32_000), operation_id="two-seconds", chunk_period_ms=1000)
+    assert speech is not None and speech.payload is not None
+    assert speech.payload.get("first_audio_window") is not True
+
+
 def test_vision_only_append_emits_without_audio_and_survives_rollback():
     buffer = MiniCPMO45PcmAppendBuffer()
     payload = dict(pcm_payload(0, speech=False), video_frames=["base", "stack"])

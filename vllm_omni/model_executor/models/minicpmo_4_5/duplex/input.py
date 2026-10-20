@@ -178,7 +178,8 @@ class MiniCPMO45PcmAppendBuffer(PcmAppendBuffer):
         # Independent VISION units must not wait for a partial microphone chunk.
         self._vision_queue: list[dict[str, object]] = []
         # The mel processor's first window is independent of how many VISION
-        # units preceded it. Set once an audio payload is committed.
+        # units preceded it. Set once an audio payload is committed, or once a
+        # silence continuation is accepted outside this buffer.
         self._audio_window_started = False
         self._audio_window_reserved = False
 
@@ -413,6 +414,15 @@ class MiniCPMO45PcmAppendBuffer(PcmAppendBuffer):
         )
         self._reservations.append(reservation)
         return reservation
+
+    def note_audio_window_started(self) -> None:
+        """The first mel window was encoded outside this buffer.
+
+        A silence continuation is submitted directly to Stage0. Once that
+        append is accepted, later speech is a normal chunk, not the 1035 ms
+        first window.
+        """
+        self._audio_window_started = True
 
     def retains_separate_vision_units(self) -> bool:
         return True

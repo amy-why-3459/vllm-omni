@@ -1780,6 +1780,11 @@ class DuplexSessionRunner:
             model_state.silence_deadline_monotonic = (
                 submit_time + chunk_period_s if submit_time > next_silence_deadline else next_silence_deadline
             )
+            # This unit is encoded outside the PCM buffer, so the buffer would
+            # otherwise still treat the next speech as the 1035 ms first window.
+            note_audio_window = getattr(model_state.audio_buffer, "note_audio_window_started", None)
+            if callable(note_audio_window):
+                note_audio_window()
 
         model_state.pending_silence_owner_id = owner_id
         task = await self._start_append(
@@ -2214,22 +2219,29 @@ class DuplexSessionRunner:
             and _is_vision_unit(retained)
             and model_state.audio_buffer.retains_separate_vision_units()
         )
+        prefix_bytes = getattr(model_state, "commit_prefix_reserved_bytes", None)
         if retained is not None and terminal_payload is not None and (prefixes or replay_vision):
             held.append({**retained, "force_listen": True})
+            # Already charged on the committed-audio ledger.
+            if isinstance(prefix_bytes, list):
+                prefix_bytes.append(0)
             model_state.committed_audio_payload = None
         for reservation in prefixes:
             assert reservation.payload is not None
             held.append({**reservation.payload, "force_listen": True})
-            # These units have left the pending buffer. The prefix append does
-            # not carry the reservation, so release its charge here.
-            charged_bytes = reservation.byte_count
             reservation.commit()
-            self.session.release_input_bytes(charged_bytes)
+            if isinstance(prefix_bytes, list):
+                # The payload stays retained until submit or discard. Releasing
+                # here would let another frame in under the pending-byte limit.
+                prefix_bytes.append(reservation.byte_count)
+            else:
+                self.session.release_input_bytes(reservation.byte_count)
         return True
 
     async def _submit_held_commit_prefixes(self, *, event_id: object = None) -> bool:
         """Submit held listen-only units before the terminal payload that follows them."""
         held = getattr(self.model_state, "commit_prefix_payloads", None)
+        prefix_bytes = getattr(self.model_state, "commit_prefix_reserved_bytes", None)
         while held:
             await self._start_append(held[0], final=False)
             if not await self._wait_for_append_tail():
@@ -2240,6 +2252,8 @@ class DuplexSessionRunner:
                 )
                 return False
             held.pop(0)
+            if prefix_bytes:
+                self.session.release_input_bytes(prefix_bytes.pop(0))
         return True
 
     async def _flush_and_submit_committed_turn(

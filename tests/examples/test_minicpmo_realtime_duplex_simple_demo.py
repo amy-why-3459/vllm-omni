@@ -358,15 +358,8 @@ def test_video_soundtrack_aligns_to_video_units(monkeypatch, tmp_path, audio_sam
 
 
 def test_video_without_soundtrack_uses_video_duration(monkeypatch, tmp_path):
-    from contextlib import nullcontext
-    from types import SimpleNamespace
-
     demo = _load_demo_module()
-    monkeypatch.setitem(
-        sys.modules,
-        "av",
-        SimpleNamespace(open=lambda path: nullcontext(SimpleNamespace(streams=SimpleNamespace(audio=[])))),
-    )
+    monkeypatch.setattr(demo, "_video_has_audio", lambda path: False)
     monkeypatch.setattr(demo, "_probe_video_frames_and_fps", lambda path: (90, 30.0))
 
     def extract(path, work_dir, **kwargs):

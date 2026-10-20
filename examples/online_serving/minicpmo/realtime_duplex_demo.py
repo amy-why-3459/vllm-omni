@@ -230,6 +230,13 @@ def _event_count_after(
     return sum(event.get("type") == event_type for event in events[index + 1 :])
 
 
+def _video_has_audio(video_path: Path) -> bool:
+    import av
+
+    with av.open(str(video_path)) as container:
+        return bool(container.streams.audio)
+
+
 def _probe_video_frames_and_fps(video_path: Path) -> tuple[int, float]:
     """Frame count and average FPS via PyAV (same approach as Daily-Omni)."""
     import av
@@ -464,11 +471,7 @@ def _resolve_duplex_av_inputs(
                 stack_frames=stack_frames,
             )
             return input_wav, frames, stacked
-        import av
-
-        with av.open(str(video_path)) as container:
-            has_audio = bool(container.streams.audio)
-        if not has_audio:
+        if not _video_has_audio(video_path):
             frame_count, frame_rate = _probe_video_frames_and_fps(video_path)
             frames, stacked = _extract_video_frames(
                 video_path,

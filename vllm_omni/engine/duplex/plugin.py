@@ -215,7 +215,12 @@ class DefaultDuplexModelSessionState(DuplexModelSessionState):
     silence_deadline_monotonic: float | None = None
     # Listen-only units peeled off a commit that had to wait for the active
     # response. Promotion submits these before the retained terminal payload.
+    # Parallel to the payloads: bytes still charged against the session until
+    # that prefix is submitted or the retained turn is discarded. A moved
+    # retained payload contributes 0 here; its charge stays on
+    # ``committed_audio_reserved_bytes``.
     commit_prefix_payloads: list[dict[str, object]] = field(default_factory=list)
+    commit_prefix_reserved_bytes: list[int] = field(default_factory=list)
 
     def retain_committed_audio(
         self,
@@ -229,13 +234,14 @@ class DefaultDuplexModelSessionState(DuplexModelSessionState):
         self.committed_audio_reserved_bytes += max(0, int(reserved_bytes))
 
     def clear_committed_audio(self) -> int:
-        reserved_bytes = self.committed_audio_reserved_bytes
+        reserved_bytes = self.committed_audio_reserved_bytes + sum(self.commit_prefix_reserved_bytes)
         self.committed_audio_payload = None
         self.committed_audio_operation_id = None
         self.committed_audio_reserved_bytes = 0
         self.deferred_response_create = False
         self.deferred_precreate_response = False
         self.commit_prefix_payloads.clear()
+        self.commit_prefix_reserved_bytes.clear()
         return reserved_bytes
 
     def clear_continuation(self) -> None:
