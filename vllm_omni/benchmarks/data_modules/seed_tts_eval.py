@@ -329,13 +329,17 @@ def _cosine_similarity_unit_vectors(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.dot(a, b))
 
 
-def _resolve_utmos_visible_cuda(utmos_device: str, eval_device: str, parent_visible: str) -> str:
+def _resolve_utmos_visible_cuda(utmos_device: str, eval_device: str, parent_visible: str | None) -> str:
     """Physical CUDA id whose child-process view is ``cuda:0``.
 
     ``balacoon/utmos`` traces ``torch.device("cuda:0")`` into the graph. Loading the
     weights on another ordinal, or on CPU, still executes that baked ``.to(cuda:0)``
     and then fails the convolution. A child with ``CUDA_VISIBLE_DEVICES`` set to the
     returned id makes the requested card the graph's ``cuda:0``.
+
+    ``parent_visible=None`` means the parent left ``CUDA_VISIBLE_DEVICES`` unset, so
+    logical ids are physical ids. An explicitly empty mask hides every GPU; the
+    child must not replace that with ``0``.
     """
     requested = utmos_device.strip()
     if not requested and eval_device.strip().lower().startswith("cuda"):
@@ -356,9 +360,14 @@ def _resolve_utmos_visible_cuda(utmos_device: str, eval_device: str, parent_visi
         )
     if logical < 0:
         raise ValueError(f"Unsupported UTMOS device {requested!r}. Use cuda:N.")
+    if parent_visible is None:
+        return str(logical)
     tokens = [part.strip() for part in parent_visible.split(",") if part.strip()]
     if not tokens:
-        return str(logical)
+        raise ValueError(
+            "CUDA_VISIBLE_DEVICES is set but empty, so UTMOS cannot select a GPU. "
+            "Unset it or list the physical ids the scorer may use."
+        )
     if logical >= len(tokens):
         raise ValueError(f"CUDA device cuda:{logical} is outside CUDA_VISIBLE_DEVICES={parent_visible!r}.")
     return tokens[logical]
@@ -487,7 +496,7 @@ def _ensure_utmos_jit_model() -> _UTMOSWorker | None:
             visible = _resolve_utmos_visible_cuda(
                 os.environ.get("SEED_TTS_UTMOS_DEVICE", ""),
                 os.environ.get("SEED_TTS_EVAL_DEVICE", ""),
-                os.environ.get("CUDA_VISIBLE_DEVICES", ""),
+                os.environ.get("CUDA_VISIBLE_DEVICES"),
             )
             repo = os.environ.get("SEED_TTS_UTMOS_HF_REPO", "balacoon/utmos").strip() or "balacoon/utmos"
             fname = os.environ.get("SEED_TTS_UTMOS_JIT_FILE", "utmos.jit").strip() or "utmos.jit"
