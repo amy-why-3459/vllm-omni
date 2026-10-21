@@ -22,7 +22,8 @@ opt-in CUDA overlay that runs all three duplex stages on MRv2. Turn results do
 not establish duplex performance or interruption correctness.
 
 The shared Code2Wav backend defaults to the fused CFM body on both CUDA and
-NPU, subject to architecture and FP32 attention-cache eligibility. CUDA also
+NPU, subject to architecture and attention-cache eligibility. CUDA accepts
+matching FP32 or FP16 estimator/cache types; NPU retains FP32 eligibility. CUDA also
 requires TF32 to be allowed; NPU fusion is independent of TF32. Set
 `cfm_fused_body: false` in the stage connector extra to restore the original
 body. On CUDA, disabling `token2wav_allow_tf32` or setting
@@ -45,14 +46,32 @@ therefore be included in end-to-end regression validation.
 CFM graph execution defaults to the fused DiT body on CUDA (when TF32 is
 allowed) and on NPU. NVIDIA SM80+ uses tiled TF32 attention; older CUDA devices
 use the fused body's SDPA fallback. NPU uses packed QKV, in-place KV and ACLNN
-AddLayerNorm, independent of TF32. Unsupported DiT layouts or non-FP32 attention
-caches retain the original body. Other platforms retain their existing default.
+AddLayerNorm, independent of TF32. Unsupported DiT layouts and cache types
+retain the original body. CUDA supports matching FP32 or FP16 estimator/cache
+types; NPU supports FP32. Other platforms retain their existing default.
 Set `cfm_fused_body: false` in connector `extra` to restore the original body.
 On CUDA, disabling TF32 with `token2wav_allow_tf32: false` or
 `MINICPMO_CODE2WAV_TF32=off` also disables the default fusion choice; an explicit
 `cfm_fused_body: true` overrides that choice and may use TF32 attention.
 Slot pooling and its `cfm_row_offset_merge` option remain opt-in. Fusion changes
 floating-point rounding and does not promise identical waveforms.
+
+## Optional CFM precision and speaker replay
+
+`cfm_float16: true` in connector `extra` opts CUDA Code2Wav into FP16 for the
+CFM estimator, its random-noise table and attention caches. The flow encoder,
+speaker extraction and HiFT retain their existing precision. This differs
+from `token2wav_float16`, which affects the whole flow. FP16 CFM changes
+rounding and requires speech-quality and service validation; it is off by
+default and does not reduce the number of flow steps.
+
+`token2wav_spk_cuda_graph: true` opts the CUDA Torch CAM++ backend into
+exact-shape graph replay. It requires the Torch speaker backend and rejects
+CPU/NPU or TensorRT speaker configurations. Up to four feature shapes are
+captured without padding; additional shapes use the existing eager forward.
+Autocast or a changed precision policy also uses the eager path. Each replay
+returns an owned embedding. This option is off by default and does not expand
+the reference-audio cache or batch reference extraction.
 
 ## Turn-mode conditioning transport
 
