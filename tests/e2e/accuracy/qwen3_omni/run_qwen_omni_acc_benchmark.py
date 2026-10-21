@@ -241,6 +241,7 @@ def _validate_seed_tts(
             result,
             mean_key="seed_tts_sim_mean",
             count_key="seed_tts_sim_evaluated",
+            expected=_seed_tts_sim_expected_count(result),
             floor=min_mean_sim,
             flag="--min-seed-tts-mean-sim",
             enable_env="SEED_TTS_SIM_EVAL=1",
@@ -251,6 +252,7 @@ def _validate_seed_tts(
             result,
             mean_key="seed_tts_utmos_mean",
             count_key="seed_tts_utmos_evaluated",
+            expected=_seed_tts_utmos_expected_count(result),
             floor=min_mean_utmos,
             flag="--min-seed-tts-mean-utmos",
             enable_env="SEED_TTS_UTMOS_EVAL=1",
@@ -264,6 +266,7 @@ def _seed_tts_floor_errors(
     *,
     mean_key: str,
     count_key: str,
+    expected: int | None,
     floor: float | None,
     flag: str,
     enable_env: str,
@@ -273,7 +276,8 @@ def _seed_tts_floor_errors(
     A missing SIM or UTMOS mean used to skip the comparison, so a CI baseline
     passed while the scorer was still off. A later forward error is counted in
     ``*_failed`` and left out of the mean, so a high mean over the clips that
-    survived must not pass either.
+    survived must not pass either. ``expected`` is the number of rows that
+    reached this scorer; rows the evaluator never hands to it do not count.
     """
     if floor is None:
         return []
@@ -284,29 +288,36 @@ def _seed_tts_floor_errors(
     if mean is None or count <= 0:
         return [f"{mean_key} is missing (evaluated={count}); set {enable_env} before applying {flag}={floor}"]
     errs: list[str] = []
-    captured = _seed_tts_captured_count(result)
-    if failed > 0 or (captured is not None and count < captured):
-        captured_text = "unknown" if captured is None else str(captured)
+    if failed > 0 or (expected is not None and count < expected):
+        expected_text = "unknown" if expected is None else str(expected)
         errs.append(
-            f"{count_key}={count} failed={failed} captured={captured_text}; coverage is incomplete for {flag}={floor}"
+            f"{count_key}={count} failed={failed} expected={expected_text}; coverage is incomplete for {flag}={floor}"
         )
     if float(mean) + 1e-12 < float(floor):
         errs.append(f"{mean_key}={float(mean):.6f} < {flag}={floor}")
     return errs
 
 
-def _seed_tts_captured_count(result: dict[str, Any]) -> int | None:
-    """Utterances that produced audio, or the WER-scored count when turns are absent."""
-    turn_count = result.get("seed_tts_turn_count")
-    if turn_count is not None:
-        captured = int(turn_count or 0)
-        captured -= int(result.get("seed_tts_request_failed", 0) or 0)
-        captured -= int(result.get("seed_tts_no_pcm", 0) or 0)
-        return max(captured, 0)
+def _seed_tts_sim_expected_count(result: dict[str, Any]) -> int | None:
+    """SIM runs only on WER-scored rows that have a reference wav."""
     content = result.get("seed_tts_content_evaluated")
     if content is None:
         return None
-    return int(content or 0)
+    expected = int(content or 0) - int(result.get("seed_tts_sim_skipped_no_ref", 0) or 0)
+    return max(expected, 0)
+
+
+def _seed_tts_utmos_expected_count(result: dict[str, Any]) -> int | None:
+    """UTMOS runs on every captured row with non-empty audio, independent of ASR."""
+    turn_count = result.get("seed_tts_turn_count")
+    if turn_count is None:
+        content = result.get("seed_tts_content_evaluated")
+        return None if content is None else int(content or 0)
+    expected = int(turn_count or 0)
+    expected -= int(result.get("seed_tts_request_failed", 0) or 0)
+    expected -= int(result.get("seed_tts_no_pcm", 0) or 0)
+    expected -= int(result.get("seed_tts_empty_audio", 0) or 0)
+    return max(expected, 0)
 
 
 def seed_tts_eval_env(ns: argparse.Namespace) -> dict[str, str]:

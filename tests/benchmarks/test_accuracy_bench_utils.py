@@ -249,6 +249,36 @@ def test_seed_tts_floor_rejects_incomplete_sim_and_utmos_coverage():
     assert not any("seed_tts_utmos_mean=3.350000" in err for err in errs)
 
 
+def test_seed_tts_floor_coverage_excludes_rows_the_scorer_never_sees():
+    """ASR failures skip SIM, empty audio skips UTMOS; neither is a coverage gap."""
+    result = {
+        "seed_tts_turn_count": 1088,
+        "seed_tts_request_failed": 0,
+        "seed_tts_no_pcm": 0,
+        "seed_tts_asr_failed": 2,
+        "seed_tts_empty_audio": 1,
+        "seed_tts_content_evaluated": 1086,
+        "seed_tts_content_error_mean": 0.02,
+        "seed_tts_sim_skipped_no_ref": 3,
+        "seed_tts_sim_mean": 0.86,
+        "seed_tts_sim_evaluated": 1083,
+        "seed_tts_sim_failed": 0,
+        "seed_tts_utmos_mean": 3.35,
+        "seed_tts_utmos_evaluated": 1087,
+        "seed_tts_utmos_failed": 0,
+    }
+    assert _validate_seed_tts(result, max_mean_wer=0.05, min_mean_sim=0.80, min_mean_utmos=3.10) == []
+
+    short = _validate_seed_tts(
+        {**result, "seed_tts_sim_evaluated": 1082, "seed_tts_utmos_evaluated": 1086},
+        max_mean_wer=0.05,
+        min_mean_sim=0.80,
+        min_mean_utmos=3.10,
+    )
+    assert any("seed_tts_sim_evaluated=1082" in err and "expected=1083" in err for err in short)
+    assert any("seed_tts_utmos_evaluated=1086" in err and "expected=1087" in err for err in short)
+
+
 def test_seed_tts_eval_env_enables_only_configured_floors(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("SEED_TTS_SIM_EVAL", raising=False)
     monkeypatch.delenv("SEED_TTS_UTMOS_EVAL", raising=False)

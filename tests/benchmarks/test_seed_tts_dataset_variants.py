@@ -339,6 +339,50 @@ def test_utmos_npu_worker_start_isolates_one_card_and_restores_parent(monkeypatc
     assert seed_tts_eval._utmos_npu_conn is not None
 
 
+@pytest.mark.parametrize("failure", ["timeout", "eof"])
+def test_utmos_npu_worker_failure_retires_worker(monkeypatch, failure):
+    """A reply left in flight would shift every later score, so the worker must not be reused."""
+    import numpy as np
+
+    from vllm_omni.benchmarks.data_modules import seed_tts_eval
+
+    sent: list[object] = []
+
+    class FakeConn:
+        def send(self, payload):
+            sent.append(payload)
+
+        def poll(self, timeout):
+            return failure != "timeout"
+
+        def recv(self):
+            raise EOFError
+
+    class FakeProc:
+        def is_alive(self):
+            return True
+
+        def join(self, timeout=None):
+            pass
+
+        def terminate(self):
+            pass
+
+    monkeypatch.setattr(seed_tts_eval, "_utmos_npu_conn", FakeConn())
+    monkeypatch.setattr(seed_tts_eval, "_utmos_npu_proc", FakeProc())
+    monkeypatch.setattr(seed_tts_eval, "_utmos_model", seed_tts_eval._UTMOS_NPU_WORKER)
+    monkeypatch.setattr(seed_tts_eval, "_utmos_jit_load_failed", False)
+
+    with pytest.raises((TimeoutError, EOFError)):
+        seed_tts_eval._utmos_predict_f32_16k(np.ones(16000, dtype=np.float32))
+
+    assert seed_tts_eval._utmos_npu_conn is None
+    assert seed_tts_eval._utmos_npu_proc is None
+    assert seed_tts_eval._utmos_jit_load_failed is True
+    assert seed_tts_eval._utmos_predict_f32_16k(np.ones(16000, dtype=np.float32)) is None
+    assert sent[-1] is None
+
+
 @pytest.mark.parametrize("audio_seconds", [0.1, 61])
 def test_seed_tts_whisper_transcribe_passes_attention_mask(monkeypatch, audio_seconds):
     from vllm_omni.benchmarks.data_modules import seed_tts_eval

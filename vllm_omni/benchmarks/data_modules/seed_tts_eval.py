@@ -522,16 +522,34 @@ def _ensure_utmos_jit_model() -> Any | None:
     return _utmos_model
 
 
+def _disable_utmos_npu_worker() -> None:
+    """Stop the worker and skip UTMOS for the rest of the run."""
+    global _utmos_jit_load_failed, _utmos_model
+    _stop_utmos_npu_worker()
+    with _lock:
+        _utmos_jit_load_failed = True
+        _utmos_model = None
+
+
 def _utmos_score_in_npu_worker(wav_f32: np.ndarray) -> float | None:
-    """Send one waveform to the isolated NPU worker and return its MOS."""
+    """Send one waveform to the isolated NPU worker and return its MOS.
+
+    A timeout leaves the reply in flight, so the next clip would read this
+    clip's score. Any timeout or broken pipe therefore retires the worker.
+    """
     conn = _utmos_npu_conn
     proc = _utmos_npu_proc
     if conn is None or proc is None or not proc.is_alive():
+        _disable_utmos_npu_worker()
         raise RuntimeError("UTMOS NPU worker is not running.")
-    conn.send(np.ascontiguousarray(wav_f32, dtype=np.float32))
-    if not conn.poll(120):
-        raise TimeoutError("UTMOS NPU worker timed out while scoring.")
-    value = conn.recv()
+    try:
+        conn.send(np.ascontiguousarray(wav_f32, dtype=np.float32))
+        if not conn.poll(120):
+            raise TimeoutError("UTMOS NPU worker timed out while scoring.")
+        value = conn.recv()
+    except (EOFError, OSError):
+        _disable_utmos_npu_worker()
+        raise
     if value is None:
         return None
     score = float(value)
@@ -773,6 +791,7 @@ def compute_seed_tts_wer_metrics(
     errs: list[float] = []
     items: list[dict[str, Any]] = []
     asr_failed = 0
+    empty_audio = 0
     no_pcm = 0
     request_failed = 0
     sim_values: list[float] = []
@@ -845,6 +864,7 @@ def compute_seed_tts_wer_metrics(
         wav_16k = _pcm_s16le_to_f32_16k(pcm, pcm_sample_rate=24000, channels=1)
         if len(wav_16k) == 0:
             asr_failed += 1
+            empty_audio += 1
             if include_per_item:
                 items.append(
                     {
@@ -991,6 +1011,7 @@ def compute_seed_tts_wer_metrics(
         "seed_tts_request_failed": request_failed,
         "seed_tts_no_pcm": no_pcm,
         "seed_tts_asr_failed": asr_failed,
+        "seed_tts_empty_audio": empty_audio,
         "seed_tts_content_metric": "wer",
         "seed_tts_sim_evaluated": len(sim_values),
         "seed_tts_sim_mean": statistics.fmean(sim_values) if sim_values else None,
