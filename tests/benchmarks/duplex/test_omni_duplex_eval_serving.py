@@ -96,6 +96,7 @@ def _result(sample):
         request_metrics=[{"stage0_tokens": {"output_token_count": 3, "itls_ms": [10.0, 30.0]}}],
         session_metrics={"ttft_ms": {"mean": 100.0}, "ttfp_ms": {"mean": 200.0}, "rtf": {"mean": 0.5}},
         timed_sentences=[{"sentence": "Done.", "start": 0.01, "end": 0.01}],
+        timed_chunks=[{"text": "Done.", "current_time": 0.01}],
         metadata={"response_done": True, "clock": "media"},
         output_tokens=3,
         audio_bytes=48000,
@@ -146,7 +147,7 @@ def test_repeated_sweep_runs_keep_artifacts_isolated(tmp_path, prepared):
     assert roots[0] != roots[1]
     assert all(root.parent == parent for root in roots)
     for concurrency, root in enumerate(roots, start=1):
-        assert json.loads((root / "PR_correction/0.json").read_text()) == [{"sentence": str(concurrency)}]
+        assert json.loads((root / "PR_correction/0.json").read_text())["sentences"] == [{"sentence": str(concurrency)}]
 
 
 @pytest.mark.asyncio
@@ -420,7 +421,10 @@ async def test_adapter_preserves_metrics_and_forwards_request(tmp_path, prepared
     assert not expected.output.exists()
     summary = adapter.finalize_duplex_eval([sample], [output])
     assert summary["published"] == 1 and not summary["artifact_errors"]
-    assert json.loads(expected.output.read_text()) == expected.timed_sentences
+    assert json.loads(expected.output.read_text()) == {
+        "sentences": expected.timed_sentences,
+        "chunks": expected.timed_chunks,
+    }
 
 
 @pytest.mark.asyncio
@@ -686,10 +690,14 @@ async def test_multiturn_drain_and_clip_end(tmp_path, prepared, monkeypatch, sta
     assert summary["published"] == int(success)
     assert summary["published_with_unfinished_responses"] == int(status == "close_tail")
     if success:
-        sentences = json.loads(output.duplex_eval_result.output.read_text())
+        response = json.loads(output.duplex_eval_result.output.read_text())
+        sentences = response["sentences"]
         assert sentences[0]["sentence"] == "Earlier."
         if status != "close_tail":
             assert sentences[1]["sentence"] == "Tail."
+        assert "".join(chunk["text"] for chunk in response["chunks"]) == "".join(
+            sentence["sentence"] for sentence in sentences
+        )
 
 
 @pytest.mark.asyncio
@@ -957,9 +965,11 @@ async def test_benchmark_socket_lifecycle_excludes_warmups(
     assert result["omni_duplex_eval"]["published"] == 2
     root = samples[0].response_root
     assert len(list(root.glob("*/*.meta.json"))) == 2
-    sentence = json.loads((root / "PR_correction/0.json").read_text())[0]
+    response = json.loads((root / "PR_correction/0.json").read_text())
+    sentence = response["sentences"][0]
     assert sentence["sentence"] == "Done."
     assert sentence["start"] == sentence["end"] == pytest.approx(0.03 if turn_detection == "server_vad" else 0.01)
+    assert response["chunks"] == [{"text": "Done.", "current_time": sentence["start"]}]
     report = json.loads((root / "duplex_metrics.json").read_text())
     assert len(report["duplex_session_metrics"]) == 2
     assert 0 <= result["duration"] < 3600

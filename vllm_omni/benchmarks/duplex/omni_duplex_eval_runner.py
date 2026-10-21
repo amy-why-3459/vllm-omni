@@ -47,7 +47,7 @@ from vllm_omni.experimental.fullduplex.client import (
 if TYPE_CHECKING:
     from vllm_omni.clients.duplex import EventCollector
 
-from .omni_duplex_eval_clock import extract_timed_sentences
+from .omni_duplex_eval_clock import extract_timed_chunks, extract_timed_sentences
 from .omni_duplex_eval_media import (
     iter_av_units,
     iter_jpegs,
@@ -75,6 +75,7 @@ class GenerateSampleResult:
     request_metrics: list[dict[str, object]] = field(default_factory=list)
     session_metrics: dict[str, object] = field(default_factory=dict)
     timed_sentences: list[dict[str, object]] = field(default_factory=list)
+    timed_chunks: list[dict[str, object]] = field(default_factory=list)
     metadata: dict[str, object] = field(default_factory=dict)
     output_tokens: int = 0
     audio_bytes: int = 0
@@ -156,7 +157,7 @@ def _cached_response_mix(output: Path) -> str:
 
 
 def write_sample_result(result: GenerateSampleResult) -> None:
-    """Publish the existing judge input format; serving calls this after timing."""
+    """Publish the judge input (RTD reads sentences, PR reads chunks); serving calls this after timing."""
     output = result.output
     output.parent.mkdir(parents=True, exist_ok=True)
     meta_path = output.with_name(output.stem + ".meta.json")
@@ -165,7 +166,8 @@ def write_sample_result(result: GenerateSampleResult) -> None:
     meta_path.write_text(json.dumps(result.metadata, indent=2), encoding="utf-8")
     temporary = output.with_suffix(".json.part")
     try:
-        temporary.write_text(json.dumps(result.timed_sentences, ensure_ascii=False, indent=2), encoding="utf-8")
+        response = {"sentences": result.timed_sentences, "chunks": result.timed_chunks}
+        temporary.write_text(json.dumps(response, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(output)
     finally:
         temporary.unlink(missing_ok=True)
@@ -343,6 +345,7 @@ async def generate_sample(
         events = list(client.events.events)
         collector = _event_collector_from_realtime(client.events)
     timed = [sentence.as_dict() for sentence in extract_timed_sentences(events, clock=clock)]
+    chunks = [chunk.as_dict() for chunk in extract_timed_chunks(events, clock=clock)]
     meta = {
         "id": sample.id,
         "split": sample.split,
@@ -394,6 +397,7 @@ async def generate_sample(
         request_metrics=[_with_sample_identity(metric, sample) for metric in bundle.request_metrics],
         session_metrics=_with_sample_identity(bundle.session_metrics, sample),
         timed_sentences=timed,
+        timed_chunks=chunks,
         metadata=meta,
         output_tokens=bundle.output_tokens,
         audio_bytes=len(client.events.audio_bytes()),

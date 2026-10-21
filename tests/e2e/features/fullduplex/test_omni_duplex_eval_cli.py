@@ -325,7 +325,10 @@ async def test_generate_exercises_realtime_socket_and_media_clock(
             pace=pace,
         )
 
-    assert json.loads(result.output.read_text(encoding="utf-8")) == [{"sentence": "Done.", "start": 0.8, "end": 0.8}]
+    assert json.loads(result.output.read_text(encoding="utf-8")) == {
+        "sentences": [{"sentence": "Done.", "start": 0.8, "end": 0.8}],
+        "chunks": [{"text": "Done.", "current_time": 0.8}],
+    }
     meta = json.loads(result.output.with_name("sample.meta.json").read_text(encoding="utf-8"))
     assert meta["response_done"] is True
     assert meta["drain_timeout"] is None

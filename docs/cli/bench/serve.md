@@ -411,7 +411,10 @@ Each invocation creates an exclusive `run-*` subdirectory, so repeated runs and
 concurrency/QPS sweeps do not overwrite or reuse earlier responses. The actual
 run path is logged and returned in `omni_duplex_eval.response_root` in the saved
 benchmark result. Only successful measured sessions publish `<split>/<id>.json`
-and `<id>.meta.json`, using the existing judge format. Publication occurs after benchmark timing, alongside
+and `<id>.meta.json`, using the upstream judge format: RTD scoring reads its
+`sentences`, and PR scoring places its per-output `chunks` (`text`,
+`current_time`) in the 10-second reminder window. A response that is a bare
+sentence list is scored by sentence start. Publication occurs after benchmark timing, alongside
 `duplex_metrics.json`; artifact errors are recorded in the saved result's
 `omni_duplex_eval` summary without discarding service measurements.
 
