@@ -66,6 +66,22 @@ MIX_SOUNDTRACK = "soundtrack"
 MIX_MODES = (MIX_QUESTION, MIX_SOUNDTRACK)
 _SERVER_TURN_SETTLE_S = 2.0
 _COMPLETION_SETTLE_S = 2.0
+# Events that can still open or extend a response after the commit. Playback
+# acknowledgements are omitted: the runner sends one every 250 ms for any
+# response that produced audio, and the server echoes each one, so counting
+# them would keep this window from ever elapsing.
+_COMPLETION_ACTIVITY = frozenset(
+    {
+        "input_audio_buffer.committed",
+        "response.created",
+        "response.done",
+        "response.listen",
+        "response.output_audio.delta",
+        "response.output_audio_transcript.delta",
+        "response.output_text.delta",
+        "response.text.delta",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -233,6 +249,14 @@ def _listened_after_commit(events: list[dict[str, object]], start: int) -> bool:
     return False
 
 
+def _completion_activity(events: list[dict[str, object]], start: int) -> int:
+    return sum(event.get("type") in _COMPLETION_ACTIVITY for event in events[start:])
+
+
+def _count_since(events: list[dict[str, object]], event_type: str, start: int) -> int:
+    return sum(event.get("type") == event_type for event in events[start:])
+
+
 async def _wait_for_server_turns(client: RealtimeDuplexClient, *, timeout_s: float) -> None:
     """Wait until no server-detected speech or response is open and turns are quiet."""
     deadline = time.monotonic() + timeout_s
@@ -358,25 +382,27 @@ async def generate_sample(
             )
 
             commit_from = len(client.events.events)
-            seen_events = commit_from
+            seen_activity = 0
             stable_since = time.monotonic()
 
             def responses_finished() -> bool:
-                # A session in which the model never speaks is a valid, silent
-                # answer: its final decision is a post-commit listen. A speak
-                # decision reserves its response only once Stage1 emits output,
-                # so that listen counts only after the stream has gone quiet.
-                nonlocal seen_events, stable_since
+                # A response that finished before the commit does not cover the
+                # residual unit. Stage1 reserves response.created only when it
+                # emits output, so that event can trail either a post-commit
+                # listen or an earlier response.done. Both endings wait until
+                # this activity has been quiet.
+                nonlocal seen_activity, stable_since
                 client.raise_if_reader_stopped()
-                if len(client.events.events) != seen_events:
-                    seen_events, stable_since = len(client.events.events), time.monotonic()
+                events = client.events.events
+                activity = _completion_activity(events, commit_from)
+                if activity != seen_activity:
+                    seen_activity, stable_since = activity, time.monotonic()
                 if not all(client.events.response_is_done(response_id) for response_id in client.events.response_ids):
                     return False
-                if client.events.count("response.done") > 0:
-                    return True
-                return (
-                    _listened_after_commit(client.events.events, commit_from)
-                    and time.monotonic() - stable_since >= _COMPLETION_SETTLE_S
+                if time.monotonic() - stable_since < _COMPLETION_SETTLE_S:
+                    return False
+                return _count_since(events, "response.done", commit_from) > 0 or _listened_after_commit(
+                    events, commit_from
                 )
 
             try:

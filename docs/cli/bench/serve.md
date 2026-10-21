@@ -486,14 +486,17 @@ them when reporting coverage or accuracy.
 
 This adapter retains the standalone runner's completion policy. Without
 `server_vad`, a session finishes once every created response has its
-`response.done` and either a response completed or, after the commit, the model
-chose to keep listening (`response.listen` with `model_listen`). The latter is a
-session in which the model never spoke; it publishes empty judge input and scores
-0 instead of failing on the drain timeout. The runner withholds the last PCM sample
-when the clip ends on a model-unit boundary, so the commit always flushes a
-residual unit and that decision covers the end of the clip. A successful
-transport/session result is therefore not proof that every final input produced
-a response, nor an accuracy score.
+`response.done`, no commit, listen, or response event has arrived for 2 seconds,
+and either a response completed after the commit or, after the commit, the model
+chose to keep listening (`response.listen` with `model_listen`). A response that
+finished before the commit does not end the session: the residual unit can still
+open a response after that `response.done`. The listening outcome is a session in
+which the model never spoke; it publishes empty judge input and scores 0 instead
+of failing on the drain timeout. The runner withholds the last PCM sample when the
+clip ends on a model-unit boundary, so the commit always flushes a residual unit
+and that decision covers the end of the clip. A successful transport/session
+result is therefore not proof that every final input produced a response, nor an
+accuracy score.
 
 ### OmniInteract Realtime Benchmark
 
