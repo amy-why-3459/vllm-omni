@@ -54,6 +54,21 @@ On CUDA, disabling TF32 with `token2wav_allow_tf32: false` or
 Slot pooling and its `cfm_row_offset_merge` option remain opt-in. Fusion changes
 floating-point rounding and does not promise identical waveforms.
 
+## Turn-mode conditioning transport
+
+Ordinary turn-mode `llm2tts` packs reference audio and thinker hidden states
+with the existing Omni tensor serializer. The request envelope's
+`model_intermediate_buffer` is untyped, so these values cross EngineCore as
+owned bytes and are restored to CPU float32 tensors by the Talker and codec
+bridge. This avoids scalar-list construction, worker list traversal and
+list-to-tensor conversion. Values match the previous list-to-float32 path;
+sampling and acoustic computation are unchanged.
+
+Legacy lists and local tensors remain accepted by consumers. Native duplex
+continues producing its existing lists. Each decode owns its storage, and the
+packed snapshot cannot be changed by later producer mutations. Transport
+microbenchmarks alone do not establish service throughput or speech quality.
+
 ## Code2Wav batching across reference audio
 
 With CUDA ragged Whole-Euler enabled, ready requests with different reference
