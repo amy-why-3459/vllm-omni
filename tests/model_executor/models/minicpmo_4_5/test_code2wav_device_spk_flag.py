@@ -146,6 +146,22 @@ def test_minicpm_device_adapter_preserves_cpu_reference_on_cuda(device, mocker):
         adapter._core.enable_trt_spk_embedding.assert_not_called()
 
 
+@pytest.mark.parametrize("cpu_reference", [None, True])
+def test_shared_core_preserves_default_speaker_policy(tmp_path, mocker, cpu_reference):
+    core = object.__new__(token2wav_module.StepAudio2Token2WavCore)
+    core.model_path = str(tmp_path)
+    core.device = torch.device("cuda")
+    get_engine = mocker.patch("vllm_omni.model_executor.models.cosyvoice3.speaker_embedding_trt.get_campplus_trt")
+    if cpu_reference is None:
+        core.enable_trt_spk_embedding()
+    else:
+        core.enable_trt_spk_embedding(cpu_reference=cpu_reference)
+    get_engine.assert_called_once_with(
+        f"{tmp_path}/campplus.onnx", device=core.device, cpu_reference=cpu_reference is True
+    )
+    assert core._spk_model is get_engine.return_value
+
+
 _OTHER_DEFAULTS = {
     "token2wav_float16",
     "token2wav_trt",
