@@ -99,8 +99,21 @@ def test_ragged_body_reuses_modulation_without_recomputing_adaln(monkeypatch, ca
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
-def test_fp16_fused_body_matches_fp16_ragged_body():
+def test_fp16_fused_body_matches_fp16_ragged_body(monkeypatch):
     estimator = _upstream_dit("cuda").half()
+    driver = BatchedToken2Wav.__new__(BatchedToken2Wav)
+    nn.Module.__init__(driver)
+    driver._ragged_fused_body = True
+    calls = []
+
+    def fused(*args, **kwargs):
+        calls.append(True)
+        return blocks_forward_chunk_fused(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "vllm_omni.model_executor.models.minicpmo_4_5.batched_token2wav.blocks_forward_chunk_fused",
+        fused,
+    )
     with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
         expected = _run(
             BatchedToken2Wav._blocks_forward_chunk_ragged,
@@ -110,6 +123,7 @@ def test_fp16_fused_body_matches_fp16_ragged_body():
             cached=5,
             lengths=[6, 4],
         )
-        actual = _run(blocks_forward_chunk_fused, estimator, rows=4, frames=6, cached=5, lengths=[6, 4])
+        actual = _run(driver._ragged_body, estimator, rows=4, frames=6, cached=5, lengths=[6, 4])
+    assert calls, "FP16 service dispatch must use the fused body"
     for want, got in zip(expected, actual, strict=True):
         torch.testing.assert_close(got, want, rtol=2e-3, atol=2e-3)
