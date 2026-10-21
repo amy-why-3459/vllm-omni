@@ -208,7 +208,11 @@ For turn-mode voice cloning, `token2wav_spk_cpu_reference: true` in connector
 `extra` selects a CUDA TensorRT speaker backend compatible with the CPU ONNX
 reference graph. The default device speaker backend remains Torch. This opt-in
 requires CUDA, `token2wav_device_spk: true` and `token2wav_trt: false`; conflicting
-settings fail at startup. It does not change DiT, HiFT, sampling or chunk size.
+settings fail at startup. The CAM++ TensorRT profile accepts 4 to 3000 fbank
+frames. The default 6 s window is 598 frames and stays on this path. A wider
+`ref_audio_max_seconds` is checked before the engine is installed: 31 s
+normalizes to 3098 frames and is rejected at startup, rather than failing while
+the first prompt is prepared. It does not change DiT, HiFT, sampling or chunk size.
 
 Install a TensorRT build matching the CUDA runtime before enabling this
 option. For example, the CUDA 13 validation environment uses

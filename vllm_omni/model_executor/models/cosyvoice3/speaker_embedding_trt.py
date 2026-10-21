@@ -163,6 +163,11 @@ class CampplusTRT:
     @torch.inference_mode()
     def __call__(self, feat: torch.Tensor) -> torch.Tensor:
         """feat: ``[T, 80]`` fbank features. Returns ``[1, 192]`` embedding."""
+        frames = int(feat.shape[0]) if feat.ndim == 2 else -1
+        if feat.ndim != 2 or int(feat.shape[1]) != 80 or frames < _MIN_T or frames > _MAX_T:
+            raise ValueError(
+                f"campplus TensorRT accepts fbank [T, 80] with T in {_MIN_T}..{_MAX_T}, got {tuple(feat.shape)}"
+            )
         x = feat.unsqueeze(0).to(self.device, dtype=torch.float32).contiguous()
         out = torch.empty((x.shape[0], _EMBED_DIM), device=self.device, dtype=torch.float32)
         stream = torch.cuda.current_stream(self.device)

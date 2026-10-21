@@ -281,6 +281,41 @@ def test_speaker_graph_flag_reaches_selected_backend(tmp_path, monkeypatch, valu
     assert speaker.speaker_graph_config is (model.vllm_config if enabled else None)
 
 
+def test_cpu_reference_speaker_accepts_the_default_six_second_window(tmp_path, monkeypatch):
+    """598 fbank frames fit the CAM++ profile, so the opt-in still installs."""
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    _, token2wav = _build_backend(
+        tmp_path,
+        monkeypatch,
+        {"token2wav_spk_cpu_reference": True, "ref_audio_max_seconds": 6},
+    )
+    assert token2wav.trt_spk_calls == 1
+    assert token2wav.trt_cpu_reference is True
+
+
+def test_cpu_reference_speaker_rejects_a_31_second_window(tmp_path, monkeypatch):
+    """31 s is 3098 fbank frames, past the profile max of 3000."""
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    with pytest.raises(ValueError, match="3098"):
+        _build_backend(
+            tmp_path,
+            monkeypatch,
+            {"token2wav_spk_cpu_reference": True, "ref_audio_max_seconds": 31},
+        )
+
+
+def test_trt_speaker_rejects_frames_outside_the_profile():
+    import torch
+
+    from vllm_omni.model_executor.models.cosyvoice3.speaker_embedding_trt import CampplusTRT
+
+    speaker = CampplusTRT.__new__(CampplusTRT)
+    with pytest.raises(ValueError, match=r"4\.\.3000"):
+        speaker(torch.zeros(3098, 80))
+
+
 @pytest.mark.parametrize("value", [True, "true", 1])
 def test_cpu_reference_speaker_is_explicit_cuda_opt_in(tmp_path, monkeypatch, value):
     monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)

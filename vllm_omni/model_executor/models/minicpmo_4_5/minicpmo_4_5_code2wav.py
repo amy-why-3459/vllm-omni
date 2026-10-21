@@ -235,6 +235,30 @@ def _normalize_reference(
     return waveform, _REF_TARGET_SAMPLE_RATE
 
 
+def reference_campplus_fbank_frames(max_seconds: float) -> int:
+    """16 kHz CAM++ fbank length of one normalized reference window.
+
+    Prompt preparation resamples the fixed 24 kHz window to 16 kHz and runs
+    Kaldi fbank with a 25 ms window, a 10 ms shift, and ``snip_edges``. The
+    CPU-reference TensorRT profile must cover this length before serving.
+    """
+    import torchaudio.compliance.kaldi as kaldi
+    from vllm.multimodal.audio import AudioResampler
+
+    samples_24k = max(1, int(max_seconds * _REF_TARGET_SAMPLE_RATE))
+    waveform_16k = AudioResampler(target_sr=16000).resample(
+        torch.zeros(samples_24k, dtype=torch.float32).numpy(),
+        orig_sr=_REF_TARGET_SAMPLE_RATE,
+    )
+    features = kaldi.fbank(
+        torch.from_numpy(waveform_16k).unsqueeze(0),
+        num_mel_bins=80,
+        dither=0,
+        sample_frequency=16000,
+    )
+    return int(features.shape[0])
+
+
 def _codec_tensor(value: Any, fallback: torch.Tensor) -> torch.Tensor:
     # Codec ids arrive from the connector as host data. A pageable host copy
     # would block the host once per request per step; stage them pinned.
@@ -1591,6 +1615,15 @@ class MiniCPMO45Code2Wav(nn.Module):
             token2wav.enable_trt_spk_embedding()
             logger.info("MiniCPM-o Code2Wav: campplus speaker embedding running on TensorRT")
         elif cpu_reference_spk:
+            from vllm_omni.model_executor.models.cosyvoice3.speaker_embedding_trt import _MAX_T, _MIN_T
+
+            frames = reference_campplus_fbank_frames(self._ref_max_seconds)
+            if frames < _MIN_T or frames > _MAX_T:
+                raise ValueError(
+                    "token2wav_spk_cpu_reference supports CAM++ TensorRT profiles of "
+                    f"{_MIN_T}..{_MAX_T} fbank frames; ref_audio_max_seconds="
+                    f"{self._ref_max_seconds} produces {frames} frames"
+                )
             token2wav.enable_trt_spk_embedding(cpu_reference=True)
             logger.info("MiniCPM-o Code2Wav: CPU-reference campplus speaker embedding on TensorRT")
         elif current_omni_platform.is_cuda() or current_omni_platform.is_npu():
