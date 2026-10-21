@@ -1607,6 +1607,9 @@ class MiniCPMO45Code2Wav(nn.Module):
                     "MiniCPM-o Code2Wav: campplus speaker embedding falling back to CPU onnxruntime "
                     "(token2wav_device_spk=false)"
                 )
+        if read_bool_flag(extra, "token2wav_spk_cuda_graph", False):
+            token2wav.enable_speaker_cuda_graph(self.vllm_config)
+            logger.info("MiniCPM-o Code2Wav: exact-shape Torch speaker CUDA graphs enabled")
         self.backend = BatchedToken2Wav(
             token2wav,
             trt_stepper=trt_stepper,
