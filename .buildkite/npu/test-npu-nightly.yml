@@ -81,8 +81,10 @@ steps:
           # Pin the Seed-TTS scorer to the second card: _get_eval_device() otherwise
           # auto-picks npu:0, which the omni server under test already fills with its
           # KV cache, so Whisper OOMs on `.to(device)` and every clip reports
-          # "ASR / WER failed". UTMOS rewrites its traced cuda:0 constants onto npu:1.
-          # There is no numeric MOS floor until an A3 run measures one.
+          # "ASR / WER failed". UTMOS cannot run the traced graph on logical npu:1
+          # in this process; the worker hides every card except that physical NPU
+          # and rewrites cuda:0 onto npu:0 there. There is no numeric MOS floor
+          # until an A3 run measures one.
           - export SEED_TTS_WER_EVAL=1
           - export SEED_TTS_SIM_EVAL=1
           - export SEED_TTS_UTMOS_EVAL=1

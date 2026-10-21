@@ -10,6 +10,7 @@ vllm stubs are installed by tests/benchmarks/conftest.py before collection.
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import types
 from pathlib import Path
@@ -260,6 +261,82 @@ def test_utmos_device_rejects_cpu_empty_mask_and_out_of_range():
         _resolve_utmos_device("", "", "")
     with pytest.raises(ValueError, match="set but empty"):
         _resolve_utmos_device("cuda:0", "", " , ")
+
+
+def test_utmos_npu_physical_id_uses_visible_mask():
+    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _utmos_npu_physical_id
+
+    # Unset mask: logical ordinal is the physical id. Nightly scores on npu:1.
+    assert _utmos_npu_physical_id(1, None) == "1"
+    assert _utmos_npu_physical_id(0, None) == "0"
+    # Parent sees a subset; the child must be given the physical id, not the logical one.
+    assert _utmos_npu_physical_id(1, "6,7") == "7"
+    assert _utmos_npu_physical_id(0, "6,7") == "6"
+
+
+def test_utmos_npu_physical_id_rejects_empty_mask_and_out_of_range():
+    from vllm_omni.benchmarks.data_modules.seed_tts_eval import _utmos_npu_physical_id
+
+    with pytest.raises(ValueError, match="set but empty"):
+        _utmos_npu_physical_id(0, "")
+    with pytest.raises(ValueError, match="set but empty"):
+        _utmos_npu_physical_id(0, " , ")
+    with pytest.raises(ValueError, match="outside ASCEND_RT_VISIBLE_DEVICES"):
+        _utmos_npu_physical_id(1, "4")
+
+
+def test_utmos_npu_worker_start_isolates_one_card_and_restores_parent(monkeypatch):
+    """The child inherits a one-card mask; the parent keeps the eval mask for Whisper."""
+    from vllm_omni.benchmarks.data_modules import seed_tts_eval
+
+    seen: dict[str, str | None] = {}
+
+    class FakeConn:
+        def recv(self):
+            return ("ready", "")
+
+        def close(self):
+            pass
+
+        def poll(self, timeout):
+            assert timeout == 300
+            return True
+
+    class FakeProc:
+        def start(self):
+            seen["during_start"] = os.environ.get("ASCEND_RT_VISIBLE_DEVICES")
+
+        def is_alive(self):
+            return True
+
+        def terminate(self):
+            seen["terminated"] = "yes"
+
+    class FakeCtx:
+        def Pipe(self, duplex=True):
+            assert duplex is True
+            return FakeConn(), FakeConn()
+
+        def Process(self, target, args, daemon, name):
+            assert daemon is True
+            assert name == "utmos-npu"
+            assert args[0] == "/tmp/utmos.jit"
+            seen["target"] = target.__name__
+            return FakeProc()
+
+    monkeypatch.setenv("ASCEND_RT_VISIBLE_DEVICES", "6,7")
+    monkeypatch.setattr(seed_tts_eval.multiprocessing, "get_context", lambda method: FakeCtx())
+    monkeypatch.setattr(seed_tts_eval, "_utmos_npu_conn", None)
+    monkeypatch.setattr(seed_tts_eval, "_utmos_npu_proc", None)
+    monkeypatch.setattr(seed_tts_eval, "_utmos_model", None)
+
+    seed_tts_eval._start_utmos_npu_worker("/tmp/utmos.jit", "7")
+
+    assert seen["during_start"] == "7"
+    assert seen["target"] == "serve_utmos_npu"
+    assert os.environ["ASCEND_RT_VISIBLE_DEVICES"] == "6,7"
+    assert seed_tts_eval._utmos_model is seed_tts_eval._UTMOS_NPU_WORKER
+    assert seed_tts_eval._utmos_npu_conn is not None
 
 
 @pytest.mark.parametrize("audio_seconds", [0.1, 61])

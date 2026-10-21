@@ -26,12 +26,13 @@ https://github.com/zhaochenyang20/seed-tts-eval):
   are over **all requests with captured PCM** (independent of ASR/WER). Non-finite scores are
   dropped and counted as failures. Override repo/file via ``SEED_TTS_UTMOS_HF_REPO`` /
   ``SEED_TTS_UTMOS_JIT_FILE``. The exported graph hardcodes ``cuda:0`` in 14 device
-  constants. After load, those constants are rewritten to the requested ``cuda:N`` or
-  ``npu:N`` so the same checkpoint runs on either accelerator. Set
-  ``SEED_TTS_UTMOS_DEVICE``. When it is unset, a ``cuda:N`` or ``npu:N``
-  ``SEED_TTS_EVAL_DEVICE`` is reused; otherwise the scorer uses ``cuda:0``.
-  Forward uses **float32** waveform in ``[-1, 1]`` (same as the WER resampled array) so
-  tensor dtypes match JIT weights; using int16 triggers
+  constants. On CUDA those constants are rewritten onto the requested ``cuda:N`` in this
+  process. On NPU a non-zero ordinal faults the traced graph, so scoring runs in a child
+  process whose ``ASCEND_RT_VISIBLE_DEVICES`` is only that physical card and the constants
+  are rewritten onto ``npu:0`` there. Set ``SEED_TTS_UTMOS_DEVICE``. When it is unset, a
+  ``cuda:N`` or ``npu:N`` ``SEED_TTS_EVAL_DEVICE`` is reused; otherwise the scorer uses
+  ``cuda:0``. Forward uses **float32** waveform in ``[-1, 1]`` (same as the WER resampled
+  array) so tensor dtypes match JIT weights; using int16 triggers
   ``RuntimeError: input type and weight type should be same`` on common exports. Disable
   with ``SEED_TTS_UTMOS_EVAL=0``.
 
@@ -51,9 +52,11 @@ does not send them.
 
 from __future__ import annotations
 
+import atexit
 import io
 import logging
 import math
+import multiprocessing
 import os
 import statistics
 import string
@@ -69,6 +72,7 @@ import numpy as np
 from vllm.benchmarks.datasets import SampleRequest
 
 from vllm_omni.benchmarks.data_modules.seed_tts_dataset import SeedTTSSampleRequest
+from vllm_omni.benchmarks.data_modules.utmos_jit import load_utmos_jit, serve_utmos_npu
 from vllm_omni.metrics.definitions import stream_pcm_format_from_env
 
 logger = logging.getLogger(__name__)
@@ -89,6 +93,10 @@ _utmos_model: Any | None = None
 _utmos_device: str | None = None
 _utmos_jit_load_failed = False
 _utmos_forward_warned = False
+# Sentinel: the JIT lives in ``_utmos_npu_proc``, not in this process.
+_UTMOS_NPU_WORKER = object()
+_utmos_npu_conn: Any | None = None
+_utmos_npu_proc: Any | None = None
 
 
 def pcm_s16le_mono_to_wav_bytes(pcm: bytes, *, sample_rate: int = 24000) -> bytes:
@@ -347,11 +355,12 @@ def _parse_utmos_accelerator(requested: str) -> tuple[str, int]:
 def _resolve_utmos_device(utmos_device: str, eval_device: str, cuda_visible: str | None) -> str:
     """Device string for the in-process UTMOS module.
 
-    The exported graph hardcodes ``cuda:0``. ``_retarget_utmos_jit_devices`` rewrites
-    those constants onto this device after load, so CUDA and NPU share one checkpoint.
-    ``cuda_visible=None`` means ``CUDA_VISIBLE_DEVICES`` is unset. An explicit empty
-    mask hides every CUDA device and is rejected for a CUDA target; an NPU target
-    does not consult that mask.
+    The exported graph hardcodes ``cuda:0``. CUDA rewrites those constants onto
+    this device in-process. NPU does not: a non-zero ordinal faults, so the caller
+    isolates the logical index onto one physical card and rewrites onto ``npu:0``
+    in a child. ``cuda_visible=None`` means ``CUDA_VISIBLE_DEVICES`` is unset. An
+    explicit empty mask hides every CUDA device and is rejected for a CUDA target;
+    an NPU target does not consult that mask.
     """
     requested = utmos_device.strip()
     if not requested:
@@ -377,63 +386,91 @@ def _resolve_utmos_device(utmos_device: str, eval_device: str, cuda_visible: str
     return f"cuda:{index}"
 
 
-def _retarget_utmos_jit_devices(module: Any, device: str) -> int:
-    """Rewrite baked ``cuda:0`` device constants onto ``device``.
+def _utmos_npu_physical_id(index: int, ascend_visible: str | None) -> str:
+    """Physical id for logical ``npu:index``.
 
-    ``balacoon/utmos`` traces ``prim::Constant[value="cuda:0"]`` into the root
-    forward, the WavLM attention layers, and the output RNN. The attribute is a
-    device string (``node.s``), not a CUDA kernel, so the same graph runs after
-    the constants move to ``cuda:N`` or ``npu:N``.
+    ``ascend_visible=None`` means ``ASCEND_RT_VISIBLE_DEVICES`` is unset, so the
+    logical index is the physical id. An explicit empty mask hides every NPU.
     """
+    if ascend_visible is None:
+        return str(index)
+    tokens = [part.strip() for part in ascend_visible.split(",") if part.strip()]
+    if not tokens:
+        raise ValueError(
+            "ASCEND_RT_VISIBLE_DEVICES is set but empty, so UTMOS cannot select an NPU. "
+            "Unset it or list the physical ids the scorer may use."
+        )
+    if index >= len(tokens):
+        raise ValueError(f"NPU device npu:{index} is outside ASCEND_RT_VISIBLE_DEVICES={ascend_visible!r}.")
+    return tokens[index]
 
-    def _walk_graph(graph: Any) -> int:
-        changed = 0
-        for node in graph.nodes():
-            if node.kind() == "prim::Constant" and "cuda:0" in str(node):
-                node.s_("value", device)
-                changed += 1
-            for block in node.blocks():
-                changed += _walk_graph(block)
-        return changed
 
-    def _walk_module(current: Any) -> int:
-        total = 0
+def _stop_utmos_npu_worker() -> None:
+    """Ask the child to exit before this process tears NPU down."""
+    global _utmos_npu_conn, _utmos_npu_proc
+    conn = _utmos_npu_conn
+    proc = _utmos_npu_proc
+    _utmos_npu_conn = None
+    _utmos_npu_proc = None
+    if conn is not None:
         try:
-            methods = list(current._c._method_names())
-        except Exception:
-            methods = []
-        for method in methods:
-            try:
-                graph = current._c._get_method(method).graph
-            except Exception:
-                continue
-            total += _walk_graph(graph)
-        for child in current.children():
-            total += _walk_module(child)
-        return total
-
-    return _walk_module(module)
+            conn.send(None)
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    if proc is not None and proc.is_alive():
+        proc.join(timeout=30)
+        if proc.is_alive():
+            proc.terminate()
+            proc.join(timeout=5)
 
 
-def _load_utmos_jit(path: str, device: str) -> Any:
-    """Load UTMOS on ``device`` and retarget the traced ``cuda:0`` constants."""
-    if device.startswith("npu"):
-        import torch_npu  # noqa: F401
-    import torch
+atexit.register(_stop_utmos_npu_worker)
 
-    model = torch.jit.load(path, map_location=device)
-    model.eval()
-    rewritten = _retarget_utmos_jit_devices(model, device)
-    if rewritten == 0:
-        raise RuntimeError(f"UTMOS graph has no cuda:0 device constants to retarget onto {device}.")
-    warmup = torch.zeros(1, 16000, dtype=torch.float32, device=device)
-    with torch.no_grad():
-        model(warmup)
-    return model
+
+def _start_utmos_npu_worker(jit_path: str, physical_id: str) -> None:
+    """Start the UTMOS child with only ``physical_id`` visible, then restore our mask.
+
+    The child inherits the environment at ``Process.start``. Restoring the parent
+    mask afterwards leaves Whisper and WavLM on the logical eval card.
+    """
+    global _utmos_npu_conn, _utmos_npu_proc, _utmos_model
+    ctx = multiprocessing.get_context("spawn")
+    parent_conn, child_conn = ctx.Pipe(duplex=True)
+    proc = ctx.Process(
+        target=serve_utmos_npu,
+        args=(jit_path, child_conn),
+        daemon=True,
+        name="utmos-npu",
+    )
+    previous = os.environ.get("ASCEND_RT_VISIBLE_DEVICES")
+    os.environ["ASCEND_RT_VISIBLE_DEVICES"] = physical_id
+    try:
+        proc.start()
+    finally:
+        if previous is None:
+            os.environ.pop("ASCEND_RT_VISIBLE_DEVICES", None)
+        else:
+            os.environ["ASCEND_RT_VISIBLE_DEVICES"] = previous
+    child_conn.close()
+    if not parent_conn.poll(300):
+        proc.terminate()
+        raise TimeoutError(f"UTMOS NPU worker on physical id {physical_id} did not become ready.")
+    kind, payload = parent_conn.recv()
+    if kind != "ready":
+        proc.terminate()
+        raise RuntimeError(f"UTMOS NPU worker on physical id {physical_id} failed to load: {payload}")
+    _utmos_npu_conn = parent_conn
+    _utmos_npu_proc = proc
+    _utmos_model = _UTMOS_NPU_WORKER
 
 
 def _ensure_utmos_jit_model() -> Any | None:
-    """Load the UTMOS JIT once on the resolved CUDA or NPU device."""
+    """Load the UTMOS JIT once.
+
+    CUDA stays in this process with constants rewritten onto ``cuda:N``. NPU
+    starts :func:`serve_utmos_npu` on the one physical card selected by
+    ``SEED_TTS_UTMOS_DEVICE``.
+    """
     global _utmos_model, _utmos_device, _utmos_jit_load_failed
     with _lock:
         if _utmos_jit_load_failed:
@@ -450,16 +487,31 @@ def _ensure_utmos_jit_model() -> Any | None:
             )
             repo = os.environ.get("SEED_TTS_UTMOS_HF_REPO", "balacoon/utmos").strip() or "balacoon/utmos"
             fname = os.environ.get("SEED_TTS_UTMOS_JIT_FILE", "utmos.jit").strip() or "utmos.jit"
-            logger.warning(
-                "Loading UTMOS TorchScript from Hugging Face %r file %r onto %s "
-                "(rewriting traced cuda:0 device constants)...",
-                repo,
-                fname,
-                device,
-            )
             path = hf_api().hf_hub_download(repo_id=repo, filename=fname, repo_type="model")
-            _utmos_model = _load_utmos_jit(path, device)
-            _utmos_device = device
+            if device.startswith("npu"):
+                physical_id = _utmos_npu_physical_id(
+                    int(device.split(":", 1)[1]),
+                    os.environ.get("ASCEND_RT_VISIBLE_DEVICES"),
+                )
+                logger.warning(
+                    "Loading UTMOS TorchScript from Hugging Face %r file %r in a child on physical NPU %s "
+                    "(logical %s is npu:0 there; rewriting traced cuda:0)...",
+                    repo,
+                    fname,
+                    physical_id,
+                    device,
+                )
+                _start_utmos_npu_worker(path, physical_id)
+            else:
+                logger.warning(
+                    "Loading UTMOS TorchScript from Hugging Face %r file %r onto %s "
+                    "(rewriting traced cuda:0 device constants)...",
+                    repo,
+                    fname,
+                    device,
+                )
+                _utmos_model = load_utmos_jit(path, device)
+                _utmos_device = device
         except Exception as exc:
             logger.warning(
                 "UTMOS JIT unavailable (set SEED_TTS_UTMOS_DEVICE to cuda:N or npu:N; check HF access): %s",
@@ -470,6 +522,24 @@ def _ensure_utmos_jit_model() -> Any | None:
     return _utmos_model
 
 
+def _utmos_score_in_npu_worker(wav_f32: np.ndarray) -> float | None:
+    """Send one waveform to the isolated NPU worker and return its MOS."""
+    conn = _utmos_npu_conn
+    proc = _utmos_npu_proc
+    if conn is None or proc is None or not proc.is_alive():
+        raise RuntimeError("UTMOS NPU worker is not running.")
+    conn.send(np.ascontiguousarray(wav_f32, dtype=np.float32))
+    if not conn.poll(120):
+        raise TimeoutError("UTMOS NPU worker timed out while scoring.")
+    value = conn.recv()
+    if value is None:
+        return None
+    score = float(value)
+    if not math.isfinite(score):
+        return None
+    return score
+
+
 def _utmos_predict_f32_16k(wav_f32: np.ndarray) -> float | None:
     """MOS from the JIT; input is float32 mono @ 16 kHz in ``[-1, 1]``.
 
@@ -477,13 +547,15 @@ def _utmos_predict_f32_16k(wav_f32: np.ndarray) -> float | None:
     float32; passing int16 tensors causes: "RuntimeError: ... input type and weight type
     should be same".
     """
-    import torch
-
     if len(wav_f32) == 0:
         return None
     model = _ensure_utmos_jit_model()
+    if model is _UTMOS_NPU_WORKER:
+        return _utmos_score_in_npu_worker(wav_f32)
     if model is None or _utmos_device is None:
         return None
+    import torch
+
     audio = torch.from_numpy(np.ascontiguousarray(wav_f32, dtype=np.float32).copy()).unsqueeze(0)
     audio = audio.to(device=_utmos_device, dtype=torch.float32)
     with torch.no_grad():
