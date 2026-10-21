@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """TensorRT speaker-embedding (campplus) extractor for CosyVoice3.
 
 Drop-in accelerator for the ONNX-Runtime campplus session used in the
@@ -22,9 +22,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import tempfile
 import threading
+from pathlib import Path
 
 import torch
+from filelock import FileLock
 from vllm.logger import init_logger
 
 logger = init_logger(__name__)
@@ -36,13 +39,47 @@ _MAX_T = 3000
 _EMBED_DIM = 192
 
 
+def _cpu_reference_onnx(onnx_path: str) -> str:
+    """Materialize portable ORT optimizations before handing the graph to TRT.
+
+    The CPU reference uses ORT_ENABLE_ALL. Its basic PadFusion can change a
+    ceil-mode AveragePool's count_include_pad, including when the explicit
+    Pad is zero. Parsing the original graph in TRT would then compute a
+    different speaker embedding. Export BASIC (standard ONNX operators), not
+    provider-specific ALL fusions, to retain the CPU reference's pool semantics.
+    """
+    import onnxruntime
+
+    root = Path(os.environ.get("COSYVOICE3_TRT_CACHE") or Path.home() / ".cache/vllm_omni/cosyvoice3_trt")
+    root.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(Path(onnx_path).read_bytes())
+    digest.update(f"|ort{onnxruntime.__version__}|basic-v1".encode())
+    target = root / f"campplus_ort_{digest.hexdigest()}.onnx"
+    with FileLock(str(target) + ".lock"):
+        if target.is_file() and target.stat().st_size:
+            return str(target)
+        fd, temporary = tempfile.mkstemp(dir=root, suffix=".onnx")
+        os.close(fd)
+        try:
+            options = onnxruntime.SessionOptions()
+            options.intra_op_num_threads = 1
+            options.graph_optimization_level = onnxruntime.GraphOptimizationLevel.ORT_ENABLE_BASIC
+            options.optimized_model_filepath = temporary
+            session = onnxruntime.InferenceSession(onnx_path, sess_options=options, providers=["CPUExecutionProvider"])
+            del session
+            os.replace(temporary, target)
+        finally:
+            Path(temporary).unlink(missing_ok=True)
+    return str(target)
+
+
 def _trt_logger():
     import tensorrt as trt
 
     return trt.Logger(trt.Logger.WARNING)
 
 
-def _convert_onnx_to_trt(onnx_path: str, plan_path: str) -> None:
+def _convert_onnx_to_trt(onnx_path: str, plan_path: str, *, allow_tf32: bool = True) -> None:
     import tensorrt as trt
 
     logger.info("Building campplus TensorRT engine from %s ...", onnx_path)
@@ -57,6 +94,8 @@ def _convert_onnx_to_trt(onnx_path: str, plan_path: str) -> None:
             raise ValueError(f"Failed to parse {onnx_path}: {errs}")
 
     config = builder.create_builder_config()
+    if not allow_tf32:
+        config.clear_flag(trt.BuilderFlag.TF32)
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 1 << 31)  # 2 GiB
 
     input_name = network.get_input(0).name
@@ -101,13 +140,13 @@ def _resolve_plan_path(onnx_path: str, prefix: str = "campplus") -> str:
 class CampplusTRT:
     """Lazily-built TensorRT campplus speaker-embedding extractor."""
 
-    def __init__(self, onnx_path: str, device: str | torch.device):
+    def __init__(self, onnx_path: str, device: str | torch.device, *, allow_tf32: bool = True):
         import tensorrt as trt
 
         self.device = torch.device(device)
-        plan_path = _resolve_plan_path(onnx_path)
+        plan_path = _resolve_plan_path(onnx_path, prefix="campplus" if allow_tf32 else "campplus_ieee")
         if not os.path.exists(plan_path) or os.path.getsize(plan_path) == 0:
-            _convert_onnx_to_trt(onnx_path, plan_path)
+            _convert_onnx_to_trt(onnx_path, plan_path, allow_tf32=allow_tf32)
 
         runtime = trt.Runtime(_trt_logger())
         with open(plan_path, "rb") as f:
@@ -144,14 +183,18 @@ class CampplusTRT:
 # new execution context on every request — inflating TTFP. Cache by
 # (engine path, device) and reuse; the context serializes concurrent enqueues
 # via its own lock, so a single shared instance is safe across requests.
-_CAMPPLUS_CACHE: dict[tuple[str, str], CampplusTRT] = {}
+_CAMPPLUS_CACHE: dict[tuple[str, str, bool], CampplusTRT] = {}
 
 
-def get_campplus_trt(onnx_path: str, device: str | torch.device) -> CampplusTRT:
+def get_campplus_trt(onnx_path: str, device: str | torch.device, *, cpu_reference: bool = False) -> CampplusTRT:
     """Return a process-wide cached :class:`CampplusTRT` (engine + context)."""
-    key = (os.path.abspath(onnx_path), str(device))
+    if cpu_reference:
+        onnx_path = _cpu_reference_onnx(onnx_path)
+    # Preserve the CPU reference's FP32 arithmetic as well as its graph.
+    allow_tf32 = not cpu_reference
+    key = (os.path.abspath(onnx_path), str(device), allow_tf32)
     inst = _CAMPPLUS_CACHE.get(key)
     if inst is None:
-        inst = CampplusTRT(onnx_path, device)
+        inst = CampplusTRT(onnx_path, device, allow_tf32=allow_tf32)
         _CAMPPLUS_CACHE[key] = inst
     return inst

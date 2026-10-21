@@ -13,6 +13,7 @@ embedding path gets enabled.
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -110,6 +111,42 @@ def test_invalid_value_is_rejected_off_npu_too(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError, match="token2wav_device_spk"):
         _build_backend(tmp_path, monkeypatch, {"token2wav_device_spk": "maybe"})
+
+
+@pytest.mark.parametrize("value", [None, False, "false", 0, "0"])
+def test_cuda_speaker_acceleration_is_opt_in(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    extra = {} if value is None else {"token2wav_device_spk": value}
+    _, token2wav = _build_backend(tmp_path, monkeypatch, extra)
+    assert token2wav.device_spk_calls == 0
+    assert token2wav.trt_spk_calls == 0
+
+
+@pytest.mark.parametrize("value", [True, "true", 1, "1"])
+def test_cuda_speaker_acceleration_does_not_enable_dit_trt(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    model, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_device_spk": value})
+    assert token2wav.device_spk_calls == 1
+    assert model.backend.kwargs["trt_stepper"] is None
+
+
+@pytest.mark.parametrize("device", ["cuda", "npu"])
+def test_minicpm_device_adapter_preserves_cpu_reference_on_cuda(device):
+    adapter = object.__new__(token2wav_module.MiniCPMO45Token2wav)
+    adapter._core = SimpleNamespace(
+        device=SimpleNamespace(type=device),
+        enable_trt_spk_embedding=Mock(),
+        enable_device_spk_embedding=Mock(),
+    )
+    adapter.enable_device_spk_embedding()
+    if device == "cuda":
+        adapter._core.enable_trt_spk_embedding.assert_called_once_with(cpu_reference=True)
+        adapter._core.enable_device_spk_embedding.assert_not_called()
+    else:
+        adapter._core.enable_device_spk_embedding.assert_called_once_with()
+        adapter._core.enable_trt_spk_embedding.assert_not_called()
 
 
 _OTHER_DEFAULTS = {

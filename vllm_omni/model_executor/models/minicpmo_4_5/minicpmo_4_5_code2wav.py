@@ -1562,8 +1562,9 @@ class MiniCPMO45Code2Wav(nn.Module):
         trt_stepper = None
         # Parsed before the platform branches: a typo in a shared stage config
         # must fail at startup on every platform, not only where the toggle is
-        # consumed (CUDA for TensorRT, NPU for the device speaker embedding).
-        device_spk = read_bool_flag(extra, "token2wav_device_spk", True)
+        # consumed. CUDA speaker-only TensorRT is opt-in; NPU retains its
+        # device embedding default. Neither requires changing the DiT backend.
+        device_spk = read_bool_flag(extra, "token2wav_device_spk", current_omni_platform.is_npu())
         use_trt = read_bool_flag(extra, "token2wav_trt", False) or (os.environ.get("MINICPMO_TOKEN2WAV_TRT", "") == "1")
         # TensorRT is CUDA-only; other platforms ignore the toggle.
         if use_trt and current_omni_platform.is_cuda():
@@ -1584,15 +1585,16 @@ class MiniCPMO45Code2Wav(nn.Module):
             logger.info("MiniCPM-o Code2Wav: DiT estimator running on TensorRT (%s)", dtype_name)
             token2wav.enable_trt_spk_embedding()
             logger.info("MiniCPM-o Code2Wav: campplus speaker embedding running on TensorRT")
-        elif current_omni_platform.is_npu():
-            # CAM++ speaker embedding on device via torch (weights loaded from
-            # the same campplus.onnx) — replaces the per-request CPU
-            # onnxruntime run that blocks the host ~120-155ms per request.
-            # "token2wav_device_spk": false in the stage extra config falls
-            # back to the CPU onnxruntime path (accuracy triage).
+        elif current_omni_platform.is_npu() or current_omni_platform.is_cuda():
+            # Reuse the speaker-only adapter: TensorRT on CUDA, torch on NPU,
+            # both loaded from campplus.onnx. Keep the flow/DiT and HiFT paths
+            # unchanged. Explicit false retains CPU ONNX for accuracy triage.
             if device_spk:
                 token2wav.enable_device_spk_embedding()
-                logger.info("MiniCPM-o Code2Wav: campplus speaker embedding running on device (torch)")
+                logger.info(
+                    "MiniCPM-o Code2Wav: campplus speaker embedding running on device (%s)",
+                    "TensorRT" if current_omni_platform.is_cuda() else "torch",
+                )
             else:
                 logger.info(
                     "MiniCPM-o Code2Wav: campplus speaker embedding falling back to CPU onnxruntime "

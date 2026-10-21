@@ -128,7 +128,10 @@ class MiniCPMO45Token2wav:
 
     def enable_device_spk_embedding(self) -> None:
         """Run the campplus speaker-embedding model on device (TRT on CUDA, torch elsewhere)."""
-        self._core.enable_device_spk_embedding()
+        if self._core.device.type == "cuda":
+            self._core.enable_trt_spk_embedding(cpu_reference=True)
+        else:
+            self._core.enable_device_spk_embedding()
 
     def __call__(self, generated_speech_tokens, prompt_wav) -> bytes:
         """One-shot tokens → 24 kHz WAV bytes."""
