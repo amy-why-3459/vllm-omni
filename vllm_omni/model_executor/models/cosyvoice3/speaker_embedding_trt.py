@@ -181,7 +181,7 @@ class CampplusTRT:
 # config disables the mm-processor object cache), so building a fresh
 # CampplusTRT each time would re-deserialize the ~33 MB engine and allocate a
 # new execution context on every request — inflating TTFP. Cache by
-# (engine path, device) and reuse; the context serializes concurrent enqueues
+# (ONNX path, device, TF32 policy) and reuse; the context serializes concurrent enqueues
 # via its own lock, so a single shared instance is safe across requests.
 _CAMPPLUS_CACHE: dict[tuple[str, str, bool], CampplusTRT] = {}
 

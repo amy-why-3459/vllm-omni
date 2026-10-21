@@ -154,3 +154,45 @@ A larger limit can compete with Thinker/Talker on a shared device, so keep the
 conservative default until cold and warm end-to-end TTFP/RTF measurements
 justify a change. Setup prefetch remains a separate opt-in; warming prompt
 features does not imply warming the CFM setup or achieving lower TTFP.
+
+## Opt-in CUDA speaker extraction
+
+For turn-mode voice cloning, `token2wav_device_spk: true` in connector
+`extra` moves CAM++ speaker extraction from CPU ONNX Runtime to CUDA
+TensorRT independently of `token2wav_trt`. CUDA defaults to CPU extraction;
+the NPU default and its Torch implementation are unchanged. This option
+does not select a different DiT, HiFT, sampling policy, or audio chunk size.
+
+Install a TensorRT build matching the CUDA runtime before enabling this
+option. For example, the CUDA 13 validation environment uses
+`tensorrt-cu13==11.4.0.106`. ONNX Runtime remains required: startup exports
+its BASIC-optimized graph before building the TensorRT engine. CAM++ uses
+zero padding followed by ceil-mode average pooling. ONNX Runtime's PadFusion
+changes the partial-window denominator; converting the original graph
+directly would not reproduce the existing CPU reference. The CUDA opt-in
+uses the optimized graph and disables TensorRT TF32 for speaker extraction.
+This does not change the independent CFM TF32 policy.
+
+`COSYVOICE3_TRT_CACHE` controls the derived ONNX and engine cache directory
+(default: `~/.cache/vllm_omni/cosyvoice3_trt`). Derived ONNX files are keyed
+by source content and ONNX Runtime version and published under a file lock.
+Engine keys separate precision policy, device, and TensorRT version. The
+first start builds an engine and can take substantially longer; measure
+startup separately from steady-state serving. Source model files are not
+modified. Revalidate speaker similarity and generated speech quality when
+changing backend versions; floating-point waveform identity is not promised.
+
+An overlay for the default turn profile is:
+
+```yaml
+base_config: minicpmo_4_5_turn.yaml
+connectors:
+  connector_of_shared_memory:
+    extra:
+      token2wav_device_spk: true
+```
+
+Place the overlay beside the base deploy YAML, or use an absolute base path.
+Use `--deploy-config` to select it. Evaluate concurrency, throughput, first
+audio latency, RTF, and speech quality against the same base profile and
+reference-audio workload before adopting it.

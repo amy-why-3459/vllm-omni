@@ -13,9 +13,9 @@ embedding path gets enabled.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import Mock
 
 import pytest
+import torch
 
 from vllm_omni.model_executor.models.minicpmo_4_5 import (
     minicpmo_4_5_code2wav as code2wav_module,
@@ -132,14 +132,11 @@ def test_cuda_speaker_acceleration_does_not_enable_dit_trt(tmp_path, monkeypatch
     assert model.backend.kwargs["trt_stepper"] is None
 
 
-@pytest.mark.parametrize("device", ["cuda", "npu"])
-def test_minicpm_device_adapter_preserves_cpu_reference_on_cuda(device):
+@pytest.mark.parametrize("device", ["cuda", "cpu"])
+def test_minicpm_device_adapter_preserves_cpu_reference_on_cuda(device, mocker):
     adapter = object.__new__(token2wav_module.MiniCPMO45Token2wav)
-    adapter._core = SimpleNamespace(
-        device=SimpleNamespace(type=device),
-        enable_trt_spk_embedding=Mock(),
-        enable_device_spk_embedding=Mock(),
-    )
+    adapter._core = mocker.Mock(spec=token2wav_module.StepAudio2Token2WavCore)
+    adapter._core.device = torch.device(device)
     adapter.enable_device_spk_embedding()
     if device == "cuda":
         adapter._core.enable_trt_spk_embedding.assert_called_once_with(cpu_reference=True)
