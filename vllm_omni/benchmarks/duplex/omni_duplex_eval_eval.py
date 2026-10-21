@@ -9,7 +9,12 @@ import json
 from pathlib import Path
 from typing import Any
 
-from .omni_duplex_eval_clock import normalize_response_chunks, normalize_response_items, validate_clock
+from .omni_duplex_eval_clock import (
+    has_response_chunks,
+    normalize_response_chunks,
+    normalize_response_items,
+    validate_clock,
+)
 from .omni_duplex_eval_dataset import DuplexSample
 from .omni_duplex_eval_judge import DuplexJudge
 from .omni_duplex_eval_media import extract_jpeg, materialize_media, video_duration
@@ -127,9 +132,11 @@ def evaluate_sample(
         task = sample.task_type
         times = _reminder_times(sample)
         chunks = normalize_response_chunks(raw)
+        # Chunks keep their own boundary whitespace; legacy sentence items are stripped.
+        separator = "" if has_response_chunks(raw) else " "
         event_rows = []
         if task == "correction" or not times:
-            response = "".join(chunk["text"] for chunk in chunks).strip()
+            response = separator.join(chunk["text"] for chunk in chunks).strip()
             parsed = parse_judge_json(
                 judge.chat(build_reminder_prompt(sample.question_text, response, task, sample.answer1))
             )
@@ -137,7 +144,9 @@ def evaluate_sample(
         else:
             for start in times:
                 lo, hi = reminder_window(start, window_size)
-                response = "".join(chunk["text"] for chunk in chunks if lo <= chunk["current_time"] <= hi).strip()
+                response = separator.join(
+                    chunk["text"] for chunk in chunks if lo <= chunk["current_time"] <= hi
+                ).strip()
                 if not response:
                     event_rows.append({"start_time": start, "response_segment": "", "success_score": 0})
                 else:

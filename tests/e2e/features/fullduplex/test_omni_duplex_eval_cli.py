@@ -137,8 +137,8 @@ def test_cli_generate_evaluate_summarize_flow(tmp_path: Path, monkeypatch: pytes
     assert summary["pr"]["mean_all_success"] == 1.0
 
 
-def _cached_sample(tmp_path: Path, meta: str | None) -> DuplexSample:
-    sample = DuplexSample.from_row({"id": "sample", "split": "PR_correction"})
+def _cached_sample(tmp_path: Path, meta: str | None, split: str = "PR_correction") -> DuplexSample:
+    sample = DuplexSample.from_row({"id": "sample", "split": split})
     output = tmp_path / sample.split / f"{sample.id}.json"
     output.parent.mkdir(parents=True)
     output.write_text(json.dumps({"sentences": [], "chunks": []}), encoding="utf-8")
@@ -224,6 +224,27 @@ async def test_generate_rejects_unknown_mix_before_reusing_cache(tmp_path, monke
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("body", ["[]", '{"sentences": [{"sentence": "Old.", "start": 1, "end": 1}]}'])
+async def test_generate_reuses_rtd_cached_response_without_chunks(tmp_path, monkeypatch, body):
+    sample = _cached_sample(tmp_path, '{"mix": "question"}', split="RTD_OCR")
+    output = tmp_path / sample.split / f"{sample.id}.json"
+    output.write_text(body, encoding="utf-8")
+
+    def unexpected_preparation(*args, **kwargs):
+        pytest.fail("RTD scores sentences, so a cached sentence list must be reused")
+
+    monkeypatch.setattr(runner, "prepare_sample", unexpected_preparation)
+    result = await runner.generate_sample(
+        sample,
+        url="ws://unused",
+        model="mock",
+        ref_audio=None,
+        output_root=tmp_path,
+        mix="question",
+    )
+    assert result.output == output
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("body", ["[]", '{"sentences": [{"sentence": "Old.", "start": 1, "end": 1}]}'])
 async def test_generate_refuses_cached_response_without_chunks(tmp_path, monkeypatch, body):

@@ -383,6 +383,36 @@ def test_reminder_text_joins_chunks_without_inserting_spaces(tmp_path, task_type
     assert "你 好" not in seen[0]
 
 
+@pytest.mark.parametrize("task_type", ["post_event_reminder", "correction"])
+def test_legacy_sentence_responses_keep_space_between_sentences(tmp_path, task_type):
+    response_path = tmp_path / "sample.json"
+    sentences = [
+        {"sentence": "Got it.", "start": 13.0, "end": 13.5},
+        {"sentence": "Let me check.", "start": 14.0, "end": 14.5},
+    ]
+    response_path.write_text(json.dumps(sentences), encoding="utf-8")
+    response_path.with_name("sample.meta.json").write_text(json.dumps({"clock": "media"}), encoding="utf-8")
+    seen = []
+
+    class Judge:
+        def chat(self, prompt):
+            seen.append(prompt)
+            return '{"success_score": 1, "reasoning": "ok"}'
+
+    sample = DuplexSample(
+        id="sample",
+        split="PR_correction" if task_type == "correction" else "PR_post_event_reminder",
+        family="pr",
+        task_type=task_type,
+        video=None,
+        question_text="Watch this.",
+        reminder1=None if task_type == "correction" else "13.0",
+        answer1="right",
+    )
+    score = eval_module.evaluate_sample(sample, response_path, tmp_path / "score.json", Judge())
+    assert score["pr"]["events"][0]["response_segment"] == "Got it. Let me check."
+
+
 def test_protocol_windows_and_parsing():
     assert PROTOCOL_PIN == "ca3c122b4d4bf67afd6b18ea5e724b4561bdde48"
     assert temporal_window(4, 5, 10) == (2.0, 3.0)

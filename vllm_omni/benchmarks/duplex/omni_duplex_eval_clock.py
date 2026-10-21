@@ -138,13 +138,18 @@ def extract_timed_chunks(events: Iterable[dict[str, Any]], *, clock: str = "medi
     return chunks
 
 
+def has_response_chunks(raw: Any) -> bool:
+    """Whether a response JSON records per-chunk output times."""
+    return isinstance(raw, dict) and isinstance(raw.get("chunks"), list)
+
+
 def normalize_response_chunks(raw: Any) -> list[dict[str, Any]]:
     """Read timed chunks for proactive-reminder scoring.
 
     Published responses carry ``chunks``; a bare sentence list is scored by
     sentence start, as before chunks were recorded.
     """
-    if isinstance(raw, dict) and isinstance(raw.get("chunks"), list):
+    if has_response_chunks(raw):
         items = raw["chunks"]
     elif isinstance(raw, dict) and isinstance(raw.get("sentences"), list):
         items = raw["sentences"]

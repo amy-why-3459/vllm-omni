@@ -47,7 +47,7 @@ from vllm_omni.experimental.fullduplex.client import (
 if TYPE_CHECKING:
     from vllm_omni.clients.duplex import EventCollector
 
-from .omni_duplex_eval_clock import extract_timed_chunks, extract_timed_sentences
+from .omni_duplex_eval_clock import extract_timed_chunks, extract_timed_sentences, has_response_chunks
 from .omni_duplex_eval_media import (
     iter_av_units,
     iter_jpegs,
@@ -159,15 +159,15 @@ def _cached_response_mix(output: Path) -> str:
 def _cached_response_has_chunks(output: Path) -> bool:
     """Whether a cached response can be scored by chunk time.
 
-    A bare sentence list has no per-chunk ``current_time``. Reusing it would
-    score that sample by sentence start while newly written files in the same
-    directory are scored by chunk time.
+    A bare sentence list has no per-chunk ``current_time``. Reusing it for a
+    proactive-reminder sample would score it by sentence start while newly
+    written files in the same directory are scored by chunk time.
     """
     try:
         raw = json.loads(output.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise ValueError(f"cannot read response {output}: {exc}") from exc
-    return isinstance(raw, dict) and isinstance(raw.get("chunks"), list)
+    return has_response_chunks(raw)
 
 
 def write_sample_result(result: GenerateSampleResult) -> None:
@@ -259,8 +259,9 @@ async def generate_sample(
     ``server_vad`` uses one detector frame per append, overriding the native
     ``unit_ms`` setting while keeping the decoded video samples unchanged.
     An existing sample is reused only when its metadata records the same ``mix``
-    and the response carries ``chunks``. Metadata written before mix was
-    recorded counts as ``question``. A bare sentence list is not reused.
+    and, for proactive-reminder samples, the response carries ``chunks``.
+    Metadata written before mix was recorded counts as ``question``. RTD only
+    reads sentences, so its bare sentence lists are still reused.
     """
     if pace not in {"realtime", "as-fast-as-possible"}:
         raise ValueError("pace must be realtime or as-fast-as-possible")
@@ -279,7 +280,7 @@ async def generate_sample(
                 f"existing response {output} was generated with mix={cached_mix!r}, not {mix!r}; "
                 "pass --overwrite or choose another response directory"
             )
-        if not _cached_response_has_chunks(output):
+        if sample.family == "pr" and not _cached_response_has_chunks(output):
             raise ValueError(
                 f"existing response {output} has no chunk times; pass --overwrite or choose another response directory"
             )
