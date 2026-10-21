@@ -1,6 +1,9 @@
 # Concurrent input / interruptible VAD turns; not native streaming input KV.
 base_config: qwen3_omni_moe.yaml
 session_mode: duplex
+duplex_session:
+  # The OmniInteract and Omni-DuplexEval jobs open eight sessions at once.
+  max_sessions: 8
 stages:
   - stage_id: 0
     limit_mm_per_prompt:

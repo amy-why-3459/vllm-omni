@@ -561,8 +561,8 @@ vllm bench serve --omni \
   --num-prompts 3
 ```
 
-The deployment serves one session at a time unless `duplex_session.max_sessions` is raised, so keep
-`--max-concurrency 1`.
+The deployment admits eight duplex sessions (`duplex_session.max_sessions`). The checked-in
+OmniInteract and Omni-DuplexEval jobs set `--max-concurrency 8`.
 
 Latency is reported per response in the `Duplex Per-Response Latency` block and as flat result keys
 (`num_/mean_/median_/p99_` + name), where every response counts once however many a session had. The standard
@@ -682,8 +682,8 @@ token interval is present within a continuous generation segment. Model-unit pac
 excluded from TPOT/ITL. Raw request metrics retain `response_created_to_first_text_ms` and
 `response_created_to_first_audio_ms` as client-envelope diagnostics.
 
-The checked-in local performance configuration measures four deterministic cases from `1q1a`, `1q1a_math`, and
-`1qna` (12 videos total), with no benchmark warmups and a maximum concurrency of two. Each subset also sends one readiness request before its
+The checked-in local performance configuration measures eight deterministic cases from `1q1a`, `1q1a_math`, and
+`1qna` (24 videos total), with no benchmark warmups and a maximum concurrency of eight. Each subset also sends one readiness request before its
 measured cases. The runner starts MiniCPM-o 4.5 on the first visible GPU and a text judge
 (`Qwen/Qwen2.5-7B-Instruct`) on the second (`CUDA_VISIBLE_DEVICES=1` relative to the process). After artifacts land it
 scores All Global IA-QTF1 through that local judge. This is protocol-compatible with the paper metric, not a GPT-4o
@@ -735,7 +735,7 @@ It differs from the MiniCPM-o configuration in three ways:
   (`omniinteract_require_response: true`). Accuracy covers `1q1a_math` only, so it is not comparable with the
   three-subset MiniCPM-o score. Its
   IA-QTF1 must be at or above `omniinteract_aggregate_min_ia_qtf1` (checked in as `0.3`); a single run on four cases
-  measured `0.50`, so the floor catches a lost correct answer or more, not small judge noise.
+  measured `0.50`, so the floor catches a lost correct answer or more, not small judge noise. The job now runs eight cases.
 - **Latency.** Compare Qwen3-Omni runs on the per-response keys, primarily `mean_duplex_client_ttfp_ms`
   (last append send in the turn window to first audio; on a continuous VAD stream this is about
   `response_created_to_first_audio_ms` plus a `[0, chunk_ms)` phase from the chunk in which server VAD closed the

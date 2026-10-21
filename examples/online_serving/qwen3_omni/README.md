@@ -564,8 +564,8 @@ Both benchmarks replay recorded clips into one duplex session. Qwen answers
 committed turns, so run them with server VAD turn detection: the client never
 commits, and frames reach Qwen as `input_image` items (it refuses
 `video_frames` on audio appends). Qwen refuses a reference voice, so omit it.
-Serve `vllm_omni/deploy/qwen3_omni_duplex.yaml` (one session at a time) and
-keep client concurrency at 1.
+Serve `vllm_omni/deploy/qwen3_omni_duplex.yaml`. It admits eight duplex sessions.
+The checked-in OmniInteract and Omni-DuplexEval jobs use `--max-concurrency 8`.
 
 ```bash
 vllm bench serve --omni \
@@ -577,7 +577,7 @@ vllm bench serve --omni \
     --dataset-name omni-duplex-eval --dataset-path Hothan/Omni-DuplexEval \
     --duplex-eval-split PR_correction \
     --duplex-eval-response-root ./duplex-eval-qwen3 \
-    --num-prompts 3 --disable-shuffle --max-concurrency 1 --num-warmups 0 \
+    --num-prompts 8 --disable-shuffle --max-concurrency 8 --num-warmups 0 \
     --ready-check-timeout-sec 0 --save-result
 ```
 
