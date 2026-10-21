@@ -201,3 +201,51 @@ A larger limit can compete with Thinker/Talker on a shared device, so keep the
 conservative default until cold and warm end-to-end TTFP/RTF measurements
 justify a change. Setup prefetch remains a separate opt-in; warming prompt
 features does not imply warming the CFM setup or achieving lower TTFP.
+
+## Opt-in CPU-reference CUDA speaker extraction
+
+For turn-mode voice cloning, `token2wav_spk_cpu_reference: true` in connector
+`extra` selects a CUDA TensorRT speaker backend compatible with the CPU ONNX
+reference graph. The default device speaker backend remains Torch. This opt-in
+requires CUDA, `token2wav_device_spk: true` and `token2wav_trt: false`; conflicting
+settings fail at startup. It does not change DiT, HiFT, sampling or chunk size.
+
+Install a TensorRT build matching the CUDA runtime before enabling this
+option. For example, the CUDA 13 validation environment uses
+`tensorrt-cu13==11.4.0.106`. ONNX Runtime remains required: startup exports
+its BASIC-optimized graph before building the TensorRT engine. CAM++ uses
+zero padding followed by ceil-mode average pooling. ONNX Runtime's PadFusion
+changes the partial-window denominator; converting the original graph
+directly would not reproduce the existing CPU reference. The CUDA opt-in
+uses the optimized graph and disables TensorRT TF32 for speaker extraction.
+This does not change the independent CFM TF32 policy.
+
+`COSYVOICE3_TRT_CACHE` controls the derived ONNX and engine cache directory
+(default: `~/.cache/vllm_omni/cosyvoice3_trt`). Derived ONNX files are keyed
+by source content and ONNX Runtime version and published under a file lock.
+Engine keys separate precision policy, device, and TensorRT version. The
+first start builds an engine and can take substantially longer; measure
+startup separately from steady-state serving. Source model files are not
+modified. Revalidate speaker similarity and generated speech quality when
+changing backend versions; floating-point waveform identity is not promised.
+
+An overlay for the default turn profile is:
+
+```yaml
+base_config: minicpmo_4_5_turn.yaml
+connectors:
+  connector_of_shared_memory:
+    extra:
+      token2wav_spk_cpu_reference: true
+```
+
+Place the overlay beside the base deploy YAML, or use an absolute base path.
+Use `--deploy-config` to select it. Evaluate concurrency, throughput, first
+audio latency, RTF, and speech quality against the same base profile and
+reference-audio workload before adopting it.
+
+`minicpmo_4_5_cpu_reference_trt_mps.yaml` combines this opt-in with private
+CUDA MPS for colocated turn-mode stages. Select it explicitly with
+`--deploy-config`; it is not the default profile. Compare it with and without
+MPS at the target concurrency: improved throughput can trade off against
+first-audio tail latency and low-concurrency throughput.

@@ -46,8 +46,9 @@ class _FakeToken2Wav:
     def enable_speaker_cuda_graph(self, config):
         self.speaker_graph_config = config
 
-    def enable_trt_spk_embedding(self):
+    def enable_trt_spk_embedding(self, *, cpu_reference=False):
         self.trt_spk_calls += 1
+        self.trt_cpu_reference = cpu_reference
 
 
 class _FakeBackend:
@@ -154,6 +155,7 @@ def test_cuda_speaker_backend_preserves_lazy_model_loading(tmp_path, monkeypatch
 
 _OTHER_DEFAULTS = {
     "token2wav_spk_cuda_graph",
+    "token2wav_spk_cpu_reference",
     "token2wav_float16",
     "token2wav_trt",
     "code2wav_bfloat16_attention_cache",
@@ -277,3 +279,33 @@ def test_speaker_graph_flag_reaches_selected_backend(tmp_path, monkeypatch, valu
     model, speaker = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cuda_graph": value})
     assert speaker.device_spk_calls == 1
     assert speaker.speaker_graph_config is (model.vllm_config if enabled else None)
+
+
+@pytest.mark.parametrize("value", [True, "true", 1])
+def test_cpu_reference_speaker_is_explicit_cuda_opt_in(tmp_path, monkeypatch, value):
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    _, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": value})
+    assert token2wav.trt_spk_calls == 1
+    assert token2wav.trt_cpu_reference is True
+    assert token2wav.device_spk_calls == 0
+
+
+@pytest.mark.parametrize(
+    "cuda,extra",
+    [(False, {}), (True, {"token2wav_device_spk": False}), (True, {"token2wav_trt": True})],
+)
+def test_cpu_reference_speaker_rejects_conflicting_settings(tmp_path, monkeypatch, cuda, extra):
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: cuda)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: not cuda)
+    with pytest.raises(ValueError, match="token2wav_spk_cpu_reference requires CUDA"):
+        _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True, **extra})
+
+
+@pytest.mark.parametrize("cpu_reference", [False, True])
+def test_facade_forwards_speaker_reference_policy(mocker, cpu_reference):
+    core = mocker.Mock(spec=token2wav_module.StepAudio2Token2WavCore)
+    facade = token2wav_module.MiniCPMO45Token2wav.__new__(token2wav_module.MiniCPMO45Token2wav)
+    facade._core = core
+    facade.enable_trt_spk_embedding(cpu_reference=cpu_reference)
+    core.enable_trt_spk_embedding.assert_called_once_with(cpu_reference=cpu_reference)

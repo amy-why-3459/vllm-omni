@@ -1565,6 +1565,12 @@ class MiniCPMO45Code2Wav(nn.Module):
         # consumed (CUDA for TensorRT, NPU for the device speaker embedding).
         device_spk = read_bool_flag(extra, "token2wav_device_spk", True)
         use_trt = read_bool_flag(extra, "token2wav_trt", False) or (os.environ.get("MINICPMO_TOKEN2WAV_TRT", "") == "1")
+        cpu_reference_spk = read_bool_flag(extra, "token2wav_spk_cpu_reference", False)
+        if cpu_reference_spk and (not current_omni_platform.is_cuda() or not device_spk or use_trt):
+            raise ValueError(
+                "token2wav_spk_cpu_reference requires CUDA, token2wav_device_spk=true "
+                "and token2wav_trt=false; it selects speaker-only CPU-reference TensorRT"
+            )
         # TensorRT is CUDA-only; other platforms ignore the toggle.
         if use_trt and current_omni_platform.is_cuda():
             from vllm_omni.model_executor.models.step_audio2.step_audio2_dit_trt import build_dit_trt_stepper
@@ -1584,6 +1590,9 @@ class MiniCPMO45Code2Wav(nn.Module):
             logger.info("MiniCPM-o Code2Wav: DiT estimator running on TensorRT (%s)", dtype_name)
             token2wav.enable_trt_spk_embedding()
             logger.info("MiniCPM-o Code2Wav: campplus speaker embedding running on TensorRT")
+        elif cpu_reference_spk:
+            token2wav.enable_trt_spk_embedding(cpu_reference=True)
+            logger.info("MiniCPM-o Code2Wav: CPU-reference campplus speaker embedding on TensorRT")
         elif current_omni_platform.is_cuda() or current_omni_platform.is_npu():
             # CAM++ speaker embedding on device via torch (weights loaded from
             # the same campplus.onnx) — replaces the per-request CPU
