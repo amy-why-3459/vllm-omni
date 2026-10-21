@@ -281,6 +281,12 @@ class TestReadAudioPcm16:
             read_audio_pcm16(broken)
 
 
+def _jpeg_mean(payload: bytes) -> float:
+    from PIL import Image
+
+    return float(np.array(Image.open(io.BytesIO(payload))).mean())
+
+
 def _make_timeline_mp4(*, video_start_s: float, audio_start_s: float, burst: int = 1600) -> bytes:
     """Return an MP4 whose PCM audio burst starts at ``audio_start_s`` on the video timeline."""
     from fractions import Fraction
@@ -296,7 +302,9 @@ def _make_timeline_mp4(*, video_start_s: float, audio_start_s: float, burst: int
         audio.time_base = Fraction(1, 16000)
         video_pts = int(round(video_start_s * 10))
         for index in range(10):
-            frame = av.VideoFrame.from_ndarray(np.full((32, 32, 3), 40, dtype=np.uint8), format="rgb24")
+            # Distinct brightness per frame so a timestamp can be checked against the audio marker.
+            color = 40 + index * 20
+            frame = av.VideoFrame.from_ndarray(np.full((32, 32, 3), color, dtype=np.uint8), format="rgb24")
             frame.pts = video_pts + index
             for packet in video.encode(frame):
                 container.mux(packet)
@@ -378,6 +386,10 @@ class TestReadSoundtrackPcm16:
         path.write_bytes(_make_timeline_mp4(video_start_s=0.5, audio_start_s=0.5))
         pcm = np.frombuffer(read_soundtrack_pcm16(path), dtype=np.int16)
         assert pcm.tolist() == [1000] * 1600
+        # Session t=0 is the video start (PTS 0.5s, first frame). Session t=0.5s
+        # is half a second later (PTS 1.0s), the same instant the audio timeline uses.
+        assert _jpeg_mean(extract_jpeg(path, timestamp=0.0)) < 50
+        assert _jpeg_mean(extract_jpeg(path, timestamp=0.5)) > 120
 
     @staticmethod
     def test_audio_offset_is_relative_to_the_video_start(tmp_path: Path) -> None:

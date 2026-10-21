@@ -156,6 +156,20 @@ def _cached_response_mix(output: Path) -> str:
     return str(mix)
 
 
+def _cached_response_has_chunks(output: Path) -> bool:
+    """Whether a cached response can be scored by chunk time.
+
+    A bare sentence list has no per-chunk ``current_time``. Reusing it would
+    score that sample by sentence start while newly written files in the same
+    directory are scored by chunk time.
+    """
+    try:
+        raw = json.loads(output.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read response {output}: {exc}") from exc
+    return isinstance(raw, dict) and isinstance(raw.get("chunks"), list)
+
+
 def write_sample_result(result: GenerateSampleResult) -> None:
     """Publish the judge input (RTD reads sentences, PR reads chunks); serving calls this after timing."""
     output = result.output
@@ -244,8 +258,9 @@ async def generate_sample(
     ``duplex_metrics.json``; they are not written into meta.
     ``server_vad`` uses one detector frame per append, overriding the native
     ``unit_ms`` setting while keeping the decoded video samples unchanged.
-    An existing sample is reused only when its metadata records the same ``mix``.
-    Metadata written before mix was recorded counts as ``question``.
+    An existing sample is reused only when its metadata records the same ``mix``
+    and the response carries ``chunks``. Metadata written before mix was
+    recorded counts as ``question``. A bare sentence list is not reused.
     """
     if pace not in {"realtime", "as-fast-as-possible"}:
         raise ValueError("pace must be realtime or as-fast-as-possible")
@@ -263,6 +278,10 @@ async def generate_sample(
             raise ValueError(
                 f"existing response {output} was generated with mix={cached_mix!r}, not {mix!r}; "
                 "pass --overwrite or choose another response directory"
+            )
+        if not _cached_response_has_chunks(output):
+            raise ValueError(
+                f"existing response {output} has no chunk times; pass --overwrite or choose another response directory"
             )
         return GenerateSampleResult(output=output)
     if prepared is not None and prepared.mix != mix:

@@ -141,7 +141,7 @@ def _cached_sample(tmp_path: Path, meta: str | None) -> DuplexSample:
     sample = DuplexSample.from_row({"id": "sample", "split": "PR_correction"})
     output = tmp_path / sample.split / f"{sample.id}.json"
     output.parent.mkdir(parents=True)
-    output.write_text("[]", encoding="utf-8")
+    output.write_text(json.dumps({"sentences": [], "chunks": []}), encoding="utf-8")
     if meta is not None:
         output.with_name(f"{sample.id}.meta.json").write_text(meta, encoding="utf-8")
     return sample
@@ -220,6 +220,29 @@ async def test_generate_rejects_unknown_mix_before_reusing_cache(tmp_path, monke
             ref_audio=None,
             output_root=tmp_path,
             mix="karaoke",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.asyncio
+@pytest.mark.parametrize("body", ["[]", '{"sentences": [{"sentence": "Old.", "start": 1, "end": 1}]}'])
+async def test_generate_refuses_cached_response_without_chunks(tmp_path, monkeypatch, body):
+    sample = _cached_sample(tmp_path, '{"mix": "question"}')
+    output = tmp_path / sample.split / f"{sample.id}.json"
+    output.write_text(body, encoding="utf-8")
+
+    def unexpected_preparation(*args, **kwargs):
+        pytest.fail("a response without chunk times must be rejected before preparation")
+
+    monkeypatch.setattr(runner, "prepare_sample", unexpected_preparation)
+    with pytest.raises(ValueError, match="no chunk times"):
+        await runner.generate_sample(
+            sample,
+            url="ws://unused",
+            model="mock",
+            ref_audio=None,
+            output_root=tmp_path,
+            mix="question",
         )
 
 

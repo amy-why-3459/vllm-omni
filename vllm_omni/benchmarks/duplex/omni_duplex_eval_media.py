@@ -134,9 +134,11 @@ def extract_jpeg(path: str | Path, *, timestamp: float, quality: int = 3) -> byt
     ``quality`` follows the ffmpeg ``-q:v`` convention (lower = better, 1..31)
     and is mapped to the PIL JPEG quality scale (higher = better).
 
-    After ``seek`` the function continues decoding until a frame with PTS >=
-    target_pts is found, matching the ``ffmpeg -ss`` semantic of returning the
-    first decodable frame *at or after* the requested timestamp.
+    ``timestamp`` is seconds after the video stream's first presentation time,
+    the same origin ``read_soundtrack_pcm16`` uses. After ``seek`` the function
+    continues decoding until a frame with PTS >= target_pts is found, matching
+    the ``ffmpeg -ss`` semantic of returning the first decodable frame *at or
+    after* the requested timestamp.
 
     Raises:
         ValueError: If the file contains no video stream or no frame could be decoded.
@@ -150,8 +152,11 @@ def extract_jpeg(path: str | Path, *, timestamp: float, quality: int = 3) -> byt
         stream.thread_type = _video_thread_type(stream)
         time_base = stream.time_base
         if time_base is None:
-            time_base = 1 / 90000
-        target_pts = int(max(0.0, timestamp) / time_base)
+            time_base = Fraction(1, 90000)
+        # Session time 0 is the first presented frame, not absolute PTS 0.
+        # Audio placement uses this same origin.
+        origin = _presentation_origin(container)
+        target_pts = int((origin + Fraction(max(0.0, timestamp))) / Fraction(time_base))
         container.seek(target_pts, any_frame=False, backward=True, stream=stream)
         closest_frame = None
         for frame in container.decode(stream):
@@ -222,10 +227,10 @@ def read_audio_pcm16(path: str | Path) -> bytes:
 def _presentation_origin(container: Any) -> Fraction:
     """Return the timeline zero used by frame extraction, in seconds.
 
-    Frames are requested at timestamps starting at 0, which lands on the video
-    stream's first presentation time. Audio has to use that same origin: a
-    container whose audio and video both start late is not silence, while audio
-    that starts later than the video is.
+    Frame requests are seconds after the video stream's first presentation
+    time, not absolute PTS. Audio has to use that same origin: a container
+    whose audio and video both start late is not silence, while audio that
+    starts later than the video is.
     """
     if container.streams.video:
         stream = container.streams.video[0]

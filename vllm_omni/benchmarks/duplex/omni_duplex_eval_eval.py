@@ -129,7 +129,7 @@ def evaluate_sample(
         chunks = normalize_response_chunks(raw)
         event_rows = []
         if task == "correction" or not times:
-            response = " ".join(chunk["text"] for chunk in chunks).strip()
+            response = "".join(chunk["text"] for chunk in chunks).strip()
             parsed = parse_judge_json(
                 judge.chat(build_reminder_prompt(sample.question_text, response, task, sample.answer1))
             )
@@ -137,7 +137,7 @@ def evaluate_sample(
         else:
             for start in times:
                 lo, hi = reminder_window(start, window_size)
-                response = " ".join(chunk["text"] for chunk in chunks if lo <= chunk["current_time"] <= hi).strip()
+                response = "".join(chunk["text"] for chunk in chunks if lo <= chunk["current_time"] <= hi).strip()
                 if not response:
                     event_rows.append({"start_time": start, "response_segment": "", "success_score": 0})
                 else:

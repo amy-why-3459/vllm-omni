@@ -129,12 +129,12 @@ def extract_timed_chunks(events: Iterable[dict[str, Any]], *, clock: str = "medi
             continue
         if current is not None and now != current:
             if text.strip():
-                chunks.append(TimedChunk(text.strip(), current))
+                chunks.append(TimedChunk(text, current))
             text = ""
         text += delta
         current = now
     if current is not None and text.strip():
-        chunks.append(TimedChunk(text.strip(), current))
+        chunks.append(TimedChunk(text, current))
     return chunks
 
 
@@ -163,7 +163,10 @@ def normalize_response_chunks(raw: Any) -> list[dict[str, Any]]:
             current_time = float(item.get("current_time", item.get("start", item.get("time", 0.0))) or 0.0)
         except (TypeError, ValueError):
             continue
-        normalized.append({"text": text.strip(), "current_time": current_time})
+        # Keep the chunk's own whitespace. Scoring concatenates chunks with no
+        # extra separator, so stripping here would split a word or insert a
+        # space into CJK when the pieces are joined.
+        normalized.append({"text": text, "current_time": current_time})
     return normalized
 
 

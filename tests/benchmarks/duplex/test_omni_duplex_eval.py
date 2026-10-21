@@ -265,9 +265,9 @@ def test_timed_chunks_group_deltas_by_media_time():
         for delta, stamp in stamped
     ]
     assert [chunk.as_dict() for chunk in extract_timed_chunks(events)] == [
-        {"text": "Look,", "current_time": 13.0},
+        {"text": "Look, ", "current_time": 13.0},
         {"text": "the man", "current_time": 14.0},
-        {"text": "is back.", "current_time": 18.0},
+        {"text": " is back.", "current_time": 18.0},
     ]
     # The same deltas form one sentence that starts before an 18 s window.
     assert [item.as_dict() for item in extract_timed_sentences(events)] == [
@@ -333,6 +333,54 @@ def test_reminder_window_selects_chunks_by_output_time(tmp_path, response, expec
     assert event["response_segment"] == expected_segment
     assert len(judged) == (1 if expected_segment else 0)
     assert score["pr"]["all_success"] is bool(expected_segment)
+
+
+@pytest.mark.parametrize(
+    "task_type,chunks,expected",
+    [
+        (
+            "post_event_reminder",
+            [{"text": "dump", "current_time": 13.0}, {"text": "lings", "current_time": 13.08}],
+            "dumplings",
+        ),
+        (
+            "post_event_reminder",
+            [{"text": "你", "current_time": 13.0}, {"text": "好", "current_time": 13.08}],
+            "你好",
+        ),
+        (
+            "correction",
+            [{"text": "hello ", "current_time": 1.0}, {"text": "world", "current_time": 1.2}],
+            "hello world",
+        ),
+    ],
+    ids=["split-word", "cjk", "inter-word-space"],
+)
+def test_reminder_text_joins_chunks_without_inserting_spaces(tmp_path, task_type, chunks, expected):
+    response_path = tmp_path / "sample.json"
+    response_path.write_text(json.dumps({"sentences": [], "chunks": chunks}), encoding="utf-8")
+    response_path.with_name("sample.meta.json").write_text(json.dumps({"clock": "media"}), encoding="utf-8")
+    seen = []
+
+    class Judge:
+        def chat(self, prompt):
+            seen.append(prompt)
+            return '{"success_score": 1, "reasoning": "ok"}'
+
+    sample = DuplexSample(
+        id="sample",
+        split="PR_correction" if task_type == "correction" else "PR_post_event_reminder",
+        family="pr",
+        task_type=task_type,
+        video=None,
+        question_text="Watch this.",
+        reminder1=None if task_type == "correction" else "13.0",
+        answer1="right",
+    )
+    eval_module.evaluate_sample(sample, response_path, tmp_path / "score.json", Judge())
+    assert expected in seen[0]
+    assert "dump lings" not in seen[0]
+    assert "你 好" not in seen[0]
 
 
 def test_protocol_windows_and_parsing():
