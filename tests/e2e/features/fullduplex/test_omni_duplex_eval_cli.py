@@ -344,11 +344,16 @@ async def test_generate_exercises_realtime_socket_and_media_clock(
                     )
                 )
             elif event["type"] == "input_audio_buffer.commit":
+                # The reply opened during the clip is not the residual decision.
+                await websocket.send(json.dumps({"type": "input_audio_buffer.committed"}))
                 await websocket.send(json.dumps({"type": "response.done", "response": {"id": "r1"}}))
+                listen = {"type": "response.listen", "response": {"metadata": {"model_listen": True}}}
+                await websocket.send(json.dumps(listen))
             elif event["type"] == "session.close":
                 await websocket.send(json.dumps({"type": "session.closed"}))
                 return
 
+    monkeypatch.setattr(runner, "_COMPLETION_SETTLE_S", 0.05)
     monkeypatch.setattr(runner, "read_audio_pcm16", lambda path: b"\0\0" * (16_000 * 8 // 10))
     monkeypatch.setattr(runner, "video_duration", lambda path: 0.8)
     monkeypatch.setattr(runner, "iter_jpegs", lambda *args, **kwargs: iter([(0.0, b"jpeg")]))
@@ -529,6 +534,89 @@ async def test_generate_keeps_a_response_opened_after_an_earlier_response_done(t
                 return
 
     monkeypatch.setattr(runner, "_COMPLETION_SETTLE_S", 0.5)
+    monkeypatch.setattr(runner, "read_audio_pcm16", lambda path: b"\1\0" * 16_000)
+    monkeypatch.setattr(runner, "video_duration", lambda path: 1.0)
+    monkeypatch.setattr(runner, "iter_jpegs", lambda *args, **kwargs: iter([(0.0, b"jpeg")]))
+    audio = tmp_path / "question.wav"
+    video = tmp_path / "video.mp4"
+    for path in (audio, video):
+        path.write_bytes(b"data")
+    sample = DuplexSample("sample", "PR_post_event_reminder", "pr", "post_event_reminder", video, audio)
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        result = await runner.generate_sample(
+            sample,
+            url=f"ws://127.0.0.1:{port}/v1/realtime?duplex=1",
+            model="mock",
+            ref_audio=None,
+            output_root=tmp_path / "responses",
+            pace="as-fast-as-possible",
+        )
+
+    assert result.error == ""
+    text = "".join(chunk["text"] for chunk in json.loads(result.output.read_text(encoding="utf-8"))["chunks"])
+    assert text == "Early.Late."
+
+
+def test_residual_unit_decision_follows_the_committed_event():
+    created = {"type": "response.created", "response": {"id": "r1"}}
+    done = {"type": "response.done", "response": {"id": "r1", "status": "completed"}}
+    committed = {"type": "input_audio_buffer.committed"}
+    listen = {"type": "response.listen", "response": {"metadata": {"model_listen": True}}}
+    late_created = {"type": "response.created", "response": {"id": "r2"}}
+    late_done = {"type": "response.done", "response": {"id": "r2", "status": "completed"}}
+
+    assert runner._residual_unit_decided([created, done, committed], 0) is False
+    assert runner._residual_unit_decided([created, committed, done], 0) is False
+    assert runner._residual_unit_decided([created, committed, listen, done], 0) is False
+    assert runner._residual_unit_decided([created, committed, done, listen], 0) is True
+    assert runner._residual_unit_decided([created, committed, late_created, late_done, done], 0) is True
+    assert runner._residual_unit_decided([committed, listen], 0) is True
+    assert runner._residual_unit_decided([created, done], 0) is False
+    cancelled = {"type": "response.done", "response": {"id": "r1", "status": "cancelled"}}
+    failed = {"type": "response.done", "response": {"id": "r1", "status": "failed"}}
+    assert runner._residual_unit_decided([created, committed, cancelled], 0) is True
+    assert runner._residual_unit_decided([created, committed, failed], 0) is True
+
+
+@pytest.mark.asyncio
+async def test_generate_waits_for_a_response_opened_after_an_in_flight_reply(tmp_path: Path, monkeypatch):
+    import websockets
+
+    async def late_response(websocket):
+        # The residual unit decides only after the in-flight reply finishes.
+        await asyncio.sleep(0.5)
+        await websocket.send(json.dumps({"type": "response.created", "response": {"id": "r2"}}))
+        await websocket.send(json.dumps({"type": "response.output_text.delta", "response_id": "r2", "delta": "Late."}))
+        await websocket.send(json.dumps({"type": "response.done", "response": {"id": "r2", "status": "completed"}}))
+
+    async def handler(websocket):
+        tasks = []
+        opened = False
+        async for raw in websocket:
+            event = json.loads(raw)
+            if event["type"] == "session.update":
+                await websocket.send(json.dumps({"type": "session.created"}))
+            elif event["type"] == "input_audio_buffer.append" and not opened:
+                opened = True
+                await websocket.send(json.dumps({"type": "response.created", "response": {"id": "r1"}}))
+                await websocket.send(
+                    json.dumps({"type": "response.output_text.delta", "response_id": "r1", "delta": "Early."})
+                )
+            elif event["type"] == "input_audio_buffer.commit":
+                await websocket.send(json.dumps({"type": "input_audio_buffer.committed"}))
+                await websocket.send(
+                    json.dumps({"type": "response.done", "response": {"id": "r1", "status": "completed"}})
+                )
+                tasks.append(asyncio.create_task(late_response(websocket)))
+            elif event["type"] == "session.close":
+                for task in tasks:
+                    task.cancel()
+                await websocket.send(json.dumps({"type": "session.closed"}))
+                return
+
+    monkeypatch.setattr(runner, "_COMPLETION_SETTLE_S", 0.2)
     monkeypatch.setattr(runner, "read_audio_pcm16", lambda path: b"\1\0" * 16_000)
     monkeypatch.setattr(runner, "video_duration", lambda path: 1.0)
     monkeypatch.setattr(runner, "iter_jpegs", lambda *args, **kwargs: iter([(0.0, b"jpeg")]))

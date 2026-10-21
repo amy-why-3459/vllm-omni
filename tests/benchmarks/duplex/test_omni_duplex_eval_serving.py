@@ -165,6 +165,7 @@ async def test_standalone_preparation_keeps_event_loop_responsive(tmp_path, prep
         return prepared
 
     monkeypatch.setattr(runner, "prepare_sample", slow_prepare)
+    monkeypatch.setattr(runner, "_COMPLETION_SETTLE_S", 0.05)
 
     async def handler(socket):
         async for raw in socket:
@@ -172,6 +173,7 @@ async def test_standalone_preparation_keeps_event_loop_responsive(tmp_path, prep
             if event["type"] == "session.update":
                 await socket.send(json.dumps({"type": "session.created"}))
             elif event["type"] == "input_audio_buffer.commit":
+                await socket.send(json.dumps({"type": "input_audio_buffer.committed"}))
                 await socket.send(json.dumps({"type": "response.created", "response": {"id": "r1"}}))
                 await socket.send(json.dumps({"type": "response.done", "response": {"id": "r1"}}))
             elif event["type"] == "session.close":
@@ -599,8 +601,9 @@ async def test_cancelled_request_propagates_and_cleans_up(tmp_path, prepared, mo
     "error_code,success",
     [("playback_ack_too_late", True), ("playback_item_not_found", True), ("invalid_session", False)],
 )
-async def test_socket_errors_match_omniinteract_policy(tmp_path, prepared, error_code, success):
+async def test_socket_errors_match_omniinteract_policy(tmp_path, prepared, error_code, success, monkeypatch):
     sample = _samples(tmp_path)[0]
+    monkeypatch.setattr(runner, "_COMPLETION_SETTLE_S", 0.05)
 
     async def handler(socket):
         async for raw in socket:
@@ -609,6 +612,7 @@ async def test_socket_errors_match_omniinteract_policy(tmp_path, prepared, error
                 await socket.send(json.dumps({"type": "session.created"}))
             elif event["type"] == "input_audio_buffer.commit":
                 for response in [
+                    {"type": "input_audio_buffer.committed"},
                     {"type": "response.created", "response": {"id": "r1"}},
                     {"type": "response.done", "response": {"id": "r1", "status": "completed"}},
                     {"type": "error", "error": {"code": error_code}},
@@ -638,6 +642,7 @@ async def test_multiturn_drain_and_clip_end(tmp_path, prepared, monkeypatch, sta
         await original_wait(predicate, timeout_s=0.2, label=kwargs["label"])
 
     monkeypatch.setattr(runner, "wait_for", bounded_wait)
+    monkeypatch.setattr(runner, "_COMPLETION_SETTLE_S", 0.05)
 
     async def handler(socket):
         nonlocal closed_before_tail
@@ -647,6 +652,10 @@ async def test_multiturn_drain_and_clip_end(tmp_path, prepared, monkeypatch, sta
             await asyncio.sleep(0.05)
             await socket.send(json.dumps({"type": "response.output_text.delta", "response_id": "r2", "delta": "Tail."}))
             await socket.send(json.dumps({"type": "response.done", "response": {"id": "r2", "status": status}}))
+            # A normal completion promotes the residual unit; this is its decision.
+            if status not in {"cancelled", "failed"}:
+                listen = {"type": "response.listen", "response": {"metadata": {"model_listen": True}}}
+                await socket.send(json.dumps(listen))
             tail_done.set()
 
         try:
@@ -662,7 +671,14 @@ async def test_multiturn_drain_and_clip_end(tmp_path, prepared, monkeypatch, sta
                         *([] if status == "close_tail" else [{"type": "response.created", "response": {"id": "r2"}}]),
                     ]:
                         await socket.send(json.dumps(response))
-                elif event["type"] == "input_audio_buffer.commit" and status not in {"timeout", "close_tail"}:
+                elif event["type"] == "input_audio_buffer.commit" and status == "close_tail":
+                    # The clip's reply is already done. The residual unit listens,
+                    # and the extra response is created only while the session closes.
+                    await socket.send(json.dumps({"type": "input_audio_buffer.committed"}))
+                    listen = {"type": "response.listen", "response": {"metadata": {"model_listen": True}}}
+                    await socket.send(json.dumps(listen))
+                elif event["type"] == "input_audio_buffer.commit" and status != "timeout":
+                    await socket.send(json.dumps({"type": "input_audio_buffer.committed"}))
                     pending = asyncio.create_task(finish_tail())
                 elif event["type"] == "session.close":
                     closed_before_tail = not tail_done.is_set()
@@ -882,6 +898,8 @@ async def test_benchmark_socket_lifecycle_excludes_warmups(
         )
         samples = [replace(sample, evaluation=options) for sample in samples]
 
+    monkeypatch.setattr(runner, "_COMPLETION_SETTLE_S", 0.05)
+
     async def handler(socket):
         responded = False
         async for raw in socket:
@@ -904,6 +922,7 @@ async def test_benchmark_socket_lifecycle_excludes_warmups(
             ):
                 responded = True
                 for response in [
+                    *([] if turn_detection == "server_vad" else [{"type": "input_audio_buffer.committed"}]),
                     {"type": "response.created", "response": {"id": "r1"}},
                     {"type": "response.output_text.delta", "response_id": "r1", "delta": "Done."},
                     {

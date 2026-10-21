@@ -487,16 +487,19 @@ them when reporting coverage or accuracy.
 This adapter retains the standalone runner's completion policy. Without
 `server_vad`, a session finishes once every created response has its
 `response.done`, no commit, listen, or response event has arrived for 2 seconds,
-and either a response completed after the commit or, after the commit, the model
-chose to keep listening (`response.listen` with `model_listen`). A response that
-finished before the commit does not end the session: the residual unit can still
-open a response after that `response.done`. The listening outcome is a session in
-which the model never spoke; it publishes empty judge input and scores 0 instead
-of failing on the drain timeout. The runner withholds the last PCM sample when the
-clip ends on a model-unit boundary, so the commit always flushes a residual unit
-and that decision covers the end of the clip. A successful transport/session
-result is therefore not proof that every final input produced a response, nor an
-accuracy score.
+and the residual unit flushed by the commit has decided. That decision is a
+`response.done` for a response created after `input_audio_buffer.committed`, or a
+`response.listen` with `model_listen` after every reply that was still open at
+that commit has finished. A reply already open when the clip ends does not
+decide the session: completing it normally is what starts the residual unit, and
+that unit can still open a response. A reply that ends cancelled or failed does
+not start one, so it can finish the session on its own. The listening outcome is
+a session in which the model never spoke; it publishes empty judge input and
+scores 0 instead of failing on the drain timeout. The runner withholds the last
+PCM sample when the clip ends on a model-unit boundary, so the commit always
+flushes a residual unit and that decision covers the end of the clip. A
+successful transport/session result is therefore not proof that every final
+input produced a response, nor an accuracy score.
 
 ### OmniInteract Realtime Benchmark
 

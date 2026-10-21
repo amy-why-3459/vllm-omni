@@ -238,23 +238,82 @@ def _is_model_listen_decision(event: dict[str, object]) -> bool:
     return isinstance(metadata, dict) and metadata.get("buffering") is not True and metadata.get("model_listen") is True
 
 
-def _listened_after_commit(events: list[dict[str, object]], start: int) -> bool:
-    """Whether the model chose silence for the final committed input."""
-    committed = False
-    for event in events[start:]:
-        if event.get("type") == "input_audio_buffer.committed":
-            committed = True
-        elif committed and event.get("type") == "response.listen" and _is_model_listen_decision(event):
-            return True
-    return False
+def _event_response_id(event: dict[str, object]) -> str | None:
+    response_id = event.get("response_id")
+    if isinstance(response_id, str):
+        return response_id
+    response = event.get("response")
+    if isinstance(response, dict):
+        nested = response.get("id")
+        if isinstance(nested, str):
+            return nested
+    return None
+
+
+def _response_status(event: dict[str, object]) -> str | None:
+    response = event.get("response")
+    if isinstance(response, dict) and isinstance(response.get("status"), str):
+        return str(response["status"])
+    status = event.get("status")
+    return status if isinstance(status, str) else None
 
 
 def _completion_activity(events: list[dict[str, object]], start: int) -> int:
     return sum(event.get("type") in _COMPLETION_ACTIVITY for event in events[start:])
 
 
-def _count_since(events: list[dict[str, object]], event_type: str, start: int) -> int:
-    return sum(event.get("type") == event_type for event in events[start:])
+def _residual_unit_decided(events: list[dict[str, object]], start: int) -> bool:
+    """Whether the unit flushed by the commit has decided.
+
+    A response created before ``input_audio_buffer.committed`` is the in-flight
+    reply. Ending it normally promotes the residual unit, so that ``response.done``
+    is not the decision; the residual then emits ``response.listen`` or opens a
+    new response. A cancelled or failed ending does not promote one.
+    """
+    committed_at = next(
+        (index for index in range(start, len(events)) if events[index].get("type") == "input_audio_buffer.committed"),
+        None,
+    )
+    if committed_at is None:
+        return False
+    created: set[str] = set()
+    finished: set[str] = set()
+    for event in events[:committed_at]:
+        event_type = event.get("type")
+        response_id = _event_response_id(event) if event_type in {"response.created", "response.done"} else None
+        if response_id is None:
+            continue
+        if event_type == "response.created":
+            created.add(response_id)
+        else:
+            finished.add(response_id)
+    open_at_commit = created - finished
+    created_after: set[str] = set()
+    finished_open: set[str] = set()
+    promotes_residual = False
+    for event in events[committed_at + 1 :]:
+        event_type = event.get("type")
+        if event_type == "response.created":
+            response_id = _event_response_id(event)
+            if response_id is not None:
+                created_after.add(response_id)
+            continue
+        if event_type == "response.done":
+            response_id = _event_response_id(event)
+            status = _response_status(event)
+            if response_id in open_at_commit:
+                finished_open.add(response_id)
+                # A missing status is a normal completion and does promote.
+                if status not in {"cancelled", "failed"}:
+                    promotes_residual = True
+                continue
+            if response_id in created_after and status != "cancelled":
+                return True
+            continue
+        if event_type == "response.listen" and finished_open >= open_at_commit and _is_model_listen_decision(event):
+            return True
+    # Nothing will follow a commit whose open replies all ended cancelled or failed.
+    return bool(open_at_commit) and finished_open >= open_at_commit and not promotes_residual and not created_after
 
 
 async def _wait_for_server_turns(client: RealtimeDuplexClient, *, timeout_s: float) -> None:
@@ -386,11 +445,10 @@ async def generate_sample(
             stable_since = time.monotonic()
 
             def responses_finished() -> bool:
-                # A response that finished before the commit does not cover the
-                # residual unit. Stage1 reserves response.created only when it
-                # emits output, so that event can trail either a post-commit
-                # listen or an earlier response.done. Both endings wait until
-                # this activity has been quiet.
+                # The residual unit decides after input_audio_buffer.committed.
+                # A reply that was already open only promotes that unit when it
+                # completes, and Stage1 can still open a response afterwards.
+                # Either ending waits until this activity has been quiet.
                 nonlocal seen_activity, stable_since
                 client.raise_if_reader_stopped()
                 events = client.events.events
@@ -401,9 +459,7 @@ async def generate_sample(
                     return False
                 if time.monotonic() - stable_since < _COMPLETION_SETTLE_S:
                     return False
-                return _count_since(events, "response.done", commit_from) > 0 or _listened_after_commit(
-                    events, commit_from
-                )
+                return _residual_unit_decided(events, commit_from)
 
             try:
                 if server_turns:
