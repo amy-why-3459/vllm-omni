@@ -1618,6 +1618,7 @@ class MiniCPMO45Code2Wav(nn.Module):
             setup_cache_size=self._setup_cache_size,
             cfm_tf32=tf32_mode != "off",
             encoder_graph_config=self._encoder_graph_config,
+            cfm_float16=read_bool_flag(extra, "cfm_float16", False),
         )
         # Captured by the first forward (the warmup run): under vLLM's weight load a graph held GiBs.
         self._precapture_pending = read_bool_flag(extra, "cfm_graph_precapture", True)
