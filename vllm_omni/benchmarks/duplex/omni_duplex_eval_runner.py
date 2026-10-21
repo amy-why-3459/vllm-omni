@@ -65,6 +65,7 @@ MIX_QUESTION = "question"
 MIX_SOUNDTRACK = "soundtrack"
 MIX_MODES = (MIX_QUESTION, MIX_SOUNDTRACK)
 _SERVER_TURN_SETTLE_S = 2.0
+_COMPLETION_SETTLE_S = 2.0
 
 
 @dataclass(frozen=True)
@@ -357,15 +358,25 @@ async def generate_sample(
             )
 
             commit_from = len(client.events.events)
+            seen_events = commit_from
+            stable_since = time.monotonic()
 
             def responses_finished() -> bool:
                 # A session in which the model never speaks is a valid, silent
-                # answer: its final decision is a post-commit listen.
+                # answer: its final decision is a post-commit listen. A speak
+                # decision reserves its response only once Stage1 emits output,
+                # so that listen counts only after the stream has gone quiet.
+                nonlocal seen_events, stable_since
                 client.raise_if_reader_stopped()
+                if len(client.events.events) != seen_events:
+                    seen_events, stable_since = len(client.events.events), time.monotonic()
                 if not all(client.events.response_is_done(response_id) for response_id in client.events.response_ids):
                     return False
-                return client.events.count("response.done") > 0 or _listened_after_commit(
-                    client.events.events, commit_from
+                if client.events.count("response.done") > 0:
+                    return True
+                return (
+                    _listened_after_commit(client.events.events, commit_from)
+                    and time.monotonic() - stable_since >= _COMPLETION_SETTLE_S
                 )
 
             try:
