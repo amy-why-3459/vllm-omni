@@ -652,8 +652,9 @@ async def test_multiturn_drain_and_clip_end(tmp_path, prepared, monkeypatch, sta
             await asyncio.sleep(0.05)
             await socket.send(json.dumps({"type": "response.output_text.delta", "response_id": "r2", "delta": "Tail."}))
             await socket.send(json.dumps({"type": "response.done", "response": {"id": "r2", "status": status}}))
-            # A normal completion promotes the residual unit; this is its decision.
-            if status not in {"cancelled", "failed"}:
+            # A cancelled reply can still be followed by the residual decision.
+            # A failed reply is itself terminal, so it needs no listen.
+            if status != "failed":
                 listen = {"type": "response.listen", "response": {"metadata": {"model_listen": True}}}
                 await socket.send(json.dumps(listen))
             tail_done.set()

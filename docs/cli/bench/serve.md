@@ -492,8 +492,11 @@ and the residual unit flushed by the commit has decided. That decision is a
 `response.listen` with `model_listen` after every reply that was still open at
 that commit has finished. A reply already open when the clip ends does not
 decide the session: completing it normally is what starts the residual unit, and
-that unit can still open a response. A reply that ends cancelled or failed does
-not start one, so it can finish the session on its own. The listening outcome is
+that unit can still open a response. A cancelled reply does not decide the
+session either: barge-in cancels that turn, and the residual response can still
+open afterwards. A failed reply does end the wait. The server does not promote
+another unit after a failure, and a failed response created after the commit is
+itself the residual. The listening outcome is
 a session in which the model never spoke; it publishes empty judge input and
 scores 0 instead of failing on the drain timeout. The runner withholds the last
 PCM sample when the clip ends on a model-unit boundary, so the commit always

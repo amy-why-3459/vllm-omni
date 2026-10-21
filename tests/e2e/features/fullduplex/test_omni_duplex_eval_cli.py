@@ -576,8 +576,15 @@ def test_residual_unit_decision_follows_the_committed_event():
     assert runner._residual_unit_decided([created, done], 0) is False
     cancelled = {"type": "response.done", "response": {"id": "r1", "status": "cancelled"}}
     failed = {"type": "response.done", "response": {"id": "r1", "status": "failed"}}
-    assert runner._residual_unit_decided([created, committed, cancelled], 0) is True
+    late_cancelled = {"type": "response.done", "response": {"id": "r2", "status": "cancelled"}}
+    late_failed = {"type": "response.done", "response": {"id": "r2", "status": "failed"}}
+    # Barge-in can cancel the open reply and still open the residual afterwards.
+    assert runner._residual_unit_decided([created, committed, cancelled], 0) is False
+    assert runner._residual_unit_decided([created, committed, cancelled, late_created, late_done], 0) is True
+    assert runner._residual_unit_decided([committed, late_created, late_cancelled], 0) is False
+    # A failed reply is terminal: nothing is promoted after it.
     assert runner._residual_unit_decided([created, committed, failed], 0) is True
+    assert runner._residual_unit_decided([committed, late_created, late_failed], 0) is True
 
 
 @pytest.mark.asyncio

@@ -268,7 +268,11 @@ def _residual_unit_decided(events: list[dict[str, object]], start: int) -> bool:
     A response created before ``input_audio_buffer.committed`` is the in-flight
     reply. Ending it normally promotes the residual unit, so that ``response.done``
     is not the decision; the residual then emits ``response.listen`` or opens a
-    new response. A cancelled or failed ending does not promote one.
+    new response. A ``cancelled`` ending is not a decision either: MiniCPM-o
+    barge-in cancels the open turn and the same input can still open the residual
+    response after the quiet window. A ``failed`` ending is. The server does not
+    promote another unit after a failure, and a failed response created after the
+    commit is itself the residual; the sample is already unsuccessful.
     """
     committed_at = next(
         (index for index in range(start, len(events)) if events[index].get("type") == "input_audio_buffer.committed"),
@@ -290,6 +294,8 @@ def _residual_unit_decided(events: list[dict[str, object]], start: int) -> bool:
     open_at_commit = created - finished
     created_after: set[str] = set()
     finished_open: set[str] = set()
+    cancelled_open = False
+    failed_open = False
     promotes_residual = False
     for event in events[committed_at + 1 :]:
         event_type = event.get("type")
@@ -303,17 +309,29 @@ def _residual_unit_decided(events: list[dict[str, object]], start: int) -> bool:
             status = _response_status(event)
             if response_id in open_at_commit:
                 finished_open.add(response_id)
-                # A missing status is a normal completion and does promote.
-                if status not in {"cancelled", "failed"}:
+                if status == "cancelled":
+                    cancelled_open = True
+                elif status == "failed":
+                    failed_open = True
+                else:
+                    # A missing status is a normal completion and does promote.
                     promotes_residual = True
                 continue
+            # The residual response itself failed. A cancellation can still be
+            # followed by the response the barge-in opens.
             if response_id in created_after and status != "cancelled":
                 return True
             continue
         if event_type == "response.listen" and finished_open >= open_at_commit and _is_model_listen_decision(event):
             return True
-    # Nothing will follow a commit whose open replies all ended cancelled or failed.
-    return bool(open_at_commit) and finished_open >= open_at_commit and not promotes_residual and not created_after
+    return (
+        bool(open_at_commit)
+        and finished_open >= open_at_commit
+        and failed_open
+        and not cancelled_open
+        and not promotes_residual
+        and not created_after
+    )
 
 
 async def _wait_for_server_turns(client: RealtimeDuplexClient, *, timeout_s: float) -> None:
