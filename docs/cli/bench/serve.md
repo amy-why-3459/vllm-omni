@@ -357,13 +357,13 @@ for Qwen3 and remains available for models that require a reference voice.
 
 The CUDA nightly configuration
 `tests/dfx/perf/tests/test_qwen3_omni_duplex_omni_duplex_eval.json` uses the common
-performance runner on three GPUs (two for Qwen3-Omni, one for the text judge).
-It measures three `PR_correction` sessions with post-run judging and two
-`RTD_counting` sessions without judging, preserving dataset order. The checks require
-complete artifacts, completed observed responses and measured text/audio latency
-for every session; judging must cover every selected PR sample. Scores are reported
-without a quality threshold. RTD scoring requires a vision-capable judge and is
-outside this configuration. No hardware latency baseline is configured.
+performance runner on three GPUs (two for Qwen3-Omni, one for the vision judge).
+It replays the same 66 CI sample ids as the MiniCPM-o Omni-DuplexEval job, at
+concurrency 8, and judges every sample with `Qwen/Qwen2.5-VL-7B-Instruct`.
+Dataset order is preserved. The checks require complete artifacts, completed
+observed responses, and measured text/audio latency for every session; judging
+must cover every selected sample. Scores are reported without a quality
+threshold. No hardware latency baseline is configured.
 These nightly checks do not establish that every input utterance produced a
 response. The dataset provides no expected VAD turn count, and a `PR_correction`
 sample can contain a single user statement, so a blanket two-response minimum is
