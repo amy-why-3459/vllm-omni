@@ -281,6 +281,38 @@ class TestReadAudioPcm16:
             read_audio_pcm16(broken)
 
 
+def _make_timeline_mp4(*, video_start_s: float, audio_start_s: float, burst: int = 1600) -> bytes:
+    """Return an MP4 whose PCM audio burst starts at ``audio_start_s`` on the video timeline."""
+    from fractions import Fraction
+
+    buf = io.BytesIO()
+    with av.open(buf, mode="w", format="mp4") as container:
+        video = container.add_stream("mpeg4", rate=10)
+        video.width = 32
+        video.height = 32
+        video.pix_fmt = "yuv420p"
+        video.time_base = Fraction(1, 10)
+        audio = container.add_stream("pcm_s16le", rate=16000, layout="mono")
+        audio.time_base = Fraction(1, 16000)
+        video_pts = int(round(video_start_s * 10))
+        for index in range(10):
+            frame = av.VideoFrame.from_ndarray(np.full((32, 32, 3), 40, dtype=np.uint8), format="rgb24")
+            frame.pts = video_pts + index
+            for packet in video.encode(frame):
+                container.mux(packet)
+        chunk = np.full(burst, 1000, dtype=np.int16)
+        audio_frame = av.AudioFrame.from_ndarray(chunk[np.newaxis, :], format="s16", layout="mono")
+        audio_frame.sample_rate = 16000
+        audio_frame.pts = int(round(audio_start_s * 16000))
+        audio_frame.time_base = Fraction(1, 16000)
+        for packet in audio.encode(audio_frame):
+            container.mux(packet)
+        for stream in (video, audio):
+            for packet in stream.encode():
+                container.mux(packet)
+    return buf.getvalue()
+
+
 def _make_synthetic_mp4_with_audio(duration: float = 1.0, fps: int = 10, sample_rate: int = 16000) -> bytes:
     """Return an MP4 byte blob carrying a video stream and a 440 Hz AAC track."""
     buf = io.BytesIO()
@@ -331,6 +363,29 @@ class TestReadSoundtrackPcm16:
         broken.write_bytes(b"\x00\x00\x00\x00")
         with pytest.raises((OSError, ValueError)):
             read_soundtrack_pcm16(broken)
+
+    @staticmethod
+    def test_audio_that_starts_after_the_video_is_left_padded(tmp_path: Path) -> None:
+        path = tmp_path / "late.mp4"
+        path.write_bytes(_make_timeline_mp4(video_start_s=0.0, audio_start_s=0.5))
+        pcm = np.frombuffer(read_soundtrack_pcm16(path), dtype=np.int16)
+        assert pcm[:8000].tolist() == [0] * 8000
+        assert pcm[8000:].tolist() == [1000] * 1600
+
+    @staticmethod
+    def test_shared_start_offset_stays_on_the_video_timeline(tmp_path: Path) -> None:
+        path = tmp_path / "shifted.mp4"
+        path.write_bytes(_make_timeline_mp4(video_start_s=0.5, audio_start_s=0.5))
+        pcm = np.frombuffer(read_soundtrack_pcm16(path), dtype=np.int16)
+        assert pcm.tolist() == [1000] * 1600
+
+    @staticmethod
+    def test_audio_offset_is_relative_to_the_video_start(tmp_path: Path) -> None:
+        path = tmp_path / "relative.mp4"
+        path.write_bytes(_make_timeline_mp4(video_start_s=0.5, audio_start_s=1.0))
+        pcm = np.frombuffer(read_soundtrack_pcm16(path), dtype=np.int16)
+        assert pcm[:8000].tolist() == [0] * 8000
+        assert pcm[8000:].tolist() == [1000] * 1600
 
 
 class TestMixPcm16:

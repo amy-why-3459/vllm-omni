@@ -138,6 +138,23 @@ def prepare_sample(
     )
 
 
+def _cached_response_mix(output: Path) -> str:
+    """Return the mix recorded for an existing sample; missing metadata is ``question``."""
+    meta_path = output.with_name(output.stem + ".meta.json")
+    if not meta_path.exists():
+        return MIX_QUESTION
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read mix from {meta_path}: {exc}") from exc
+    if not isinstance(meta, dict):
+        raise ValueError(f"cannot read mix from {meta_path}: metadata must be a JSON object")
+    mix = meta.get("mix", MIX_QUESTION)
+    if mix not in MIX_MODES:
+        raise ValueError(f"{meta_path} records unsupported mix={mix!r}")
+    return str(mix)
+
+
 def write_sample_result(result: GenerateSampleResult) -> None:
     """Publish the existing judge input format; serving calls this after timing."""
     output = result.output
@@ -225,19 +242,27 @@ async def generate_sample(
     ``duplex_metrics.json``; they are not written into meta.
     ``server_vad`` uses one detector frame per append, overriding the native
     ``unit_ms`` setting while keeping the decoded video samples unchanged.
+    An existing sample is reused only when its metadata records the same ``mix``.
+    Metadata written before mix was recorded counts as ``question``.
     """
     if pace not in {"realtime", "as-fast-as-possible"}:
         raise ValueError("pace must be realtime or as-fast-as-possible")
     if turn_detection not in TURN_DETECTION_MODES:
         raise ValueError(f"turn_detection must be one of {TURN_DETECTION_MODES}")
+    if mix not in MIX_MODES:
+        raise ValueError(f"mix must be one of {MIX_MODES}")
     server_turns = turn_detection == TURN_DETECTION_SERVER_VAD
     if server_turns and pace != "realtime":
         raise ValueError("server_vad requires pace='realtime' to preserve turn and playback timing")
     output = Path(output_root) / sample.split / f"{sample.id}.json"
     if not defer_artifacts and output.exists() and not overwrite:
+        cached_mix = _cached_response_mix(output)
+        if cached_mix != mix:
+            raise ValueError(
+                f"existing response {output} was generated with mix={cached_mix!r}, not {mix!r}; "
+                "pass --overwrite or choose another response directory"
+            )
         return GenerateSampleResult(output=output)
-    if mix not in MIX_MODES:
-        raise ValueError(f"mix must be one of {MIX_MODES}")
     if prepared is not None and prepared.mix != mix:
         raise ValueError(f"prepared input uses mix={prepared.mix!r}, not {mix!r}")
     if server_turns:

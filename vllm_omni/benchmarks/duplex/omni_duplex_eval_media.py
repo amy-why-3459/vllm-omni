@@ -16,6 +16,7 @@ import os
 import tempfile
 import wave
 from collections.abc import Iterator
+from fractions import Fraction
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -218,18 +219,87 @@ def read_audio_pcm16(path: str | Path) -> bytes:
         raise
 
 
+def _presentation_origin(container: Any) -> Fraction:
+    """Return the timeline zero used by frame extraction, in seconds.
+
+    Frames are requested at timestamps starting at 0, which lands on the video
+    stream's first presentation time. Audio has to use that same origin: a
+    container whose audio and video both start late is not silence, while audio
+    that starts later than the video is.
+    """
+    if container.streams.video:
+        stream = container.streams.video[0]
+        if stream.start_time is not None and stream.time_base is not None:
+            return Fraction(int(stream.start_time)) * Fraction(stream.time_base)
+    start = getattr(container, "start_time", None)
+    if start:
+        import av
+
+        return Fraction(int(start), int(av.time_base))
+    return Fraction(0)
+
+
+def _pcm_sample_index(frame: Any, origin: Fraction) -> int | None:
+    """Map a decoded frame onto the 16 kHz timeline, or None when it has no PTS."""
+    if frame.pts is None or frame.time_base is None:
+        return None
+    delta = Fraction(int(frame.pts)) * Fraction(frame.time_base) - origin
+    return int(round(delta * PCM16_SAMPLE_RATE))
+
+
 def read_soundtrack_pcm16(path: str | Path) -> bytes:
-    """Decode a clip's own audio track to 16 kHz mono PCM16; empty when it has none."""
+    """Decode a clip's own audio track to 16 kHz mono PCM16.
+
+    The returned buffer starts at the video timeline's zero. A track with no
+    audio stream is empty. A track whose presentation time is later than the
+    video start is left-padded with silence; one that leads the video is trimmed.
+    Sample placement follows each decoded frame's PTS, so a leading offset or an
+    edit list that shifts the start stays aligned with the question audio and the
+    extracted frames.
+    """
     import av
+    import numpy as np
 
     try:
         with av.open(str(path)) as container:
             if not container.streams.audio:
                 return b""
+            origin = _presentation_origin(container)
+            resampler = av.AudioResampler(format="s16", layout="mono", rate=PCM16_SAMPLE_RATE)
+            pieces: list[tuple[int, Any]] = []
+            cursor = 0
+
+            def _take(frame: Any) -> None:
+                nonlocal cursor
+                samples = np.asarray(frame.to_ndarray(), dtype=np.int16).reshape(-1).copy()
+                if samples.size == 0:
+                    return
+                index = _pcm_sample_index(frame, origin)
+                if index is None:
+                    index = cursor
+                if index < 0:
+                    samples = samples[-index:]
+                    index = 0
+                if samples.size == 0:
+                    return
+                pieces.append((index, samples))
+                cursor = index + int(samples.size)
+
+            for frame in container.decode(audio=0):
+                for resampled in resampler.resample(frame):
+                    _take(resampled)
+            for resampled in resampler.resample(None):
+                _take(resampled)
     except (OSError, ValueError) as exc:
-        logger.warning("Failed to open %s for its audio track: %s", path, exc)
+        logger.warning("Failed to read the audio track from %s: %s", path, exc)
         raise
-    return read_audio_pcm16(path)
+    if not pieces:
+        return b""
+    end = max((index + int(samples.size) for index, samples in pieces))
+    mixed = np.zeros(end, dtype=np.int16)
+    for index, samples in pieces:
+        mixed[index : index + int(samples.size)] = samples
+    return mixed.tobytes()
 
 
 def mix_pcm16(*tracks: bytes) -> bytes:

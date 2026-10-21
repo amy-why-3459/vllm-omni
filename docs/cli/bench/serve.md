@@ -373,8 +373,10 @@ Inputs retain the standalone runner's real-time pacing, question audio, media
 clock and 1 FPS default (`--duplex-eval-fps`). `--duplex-eval-mix` selects the
 session audio: `question` (default) streams only the instruction audio, while
 `soundtrack` sums it with the clip's own audio track, sample by sample with int16
-clipping. The dataset pads each instruction to the clip length, so the overlay keeps
-the original timestamps. Use `soundtrack` for samples that depend on what is said
+clipping. The dataset pads each instruction to the clip length. Clip audio is placed
+at its presentation time relative to the video start, including a leading silence
+when the track starts later, so the overlay keeps the original timestamps. Use
+`soundtrack` for samples that depend on what is said
 or heard in the clip, such as the word-repetition prompts in
 `PR_post_event_reminder` and `RTD_Omni`; a clip without an audio track keeps the
 instruction alone. The standalone `generate` command accepts the same choice as `--mix`.
@@ -465,9 +467,11 @@ unpublished sessions. To automatically score the actual successfully published
 samples, including shuffled or partially successful runs, use
 `--duplex-eval-evaluate` during `bench serve`.
 
-The standalone `generate` command remains available, including its existing
-skip-existing/overwrite behavior. This integration does not change scoring rules
-or enable new nightly jobs.
+The standalone `generate` command remains available. It still skips an existing
+sample unless `--overwrite` is set, and it reuses that sample only when the
+recorded mix matches (metadata without a mix counts as `question`). A different
+mix is rejected instead of returning the other artifact. This integration does
+not change scoring rules or enable new nightly jobs.
 
 For shuffled runs, use `evaluate --ids` with the successful selected sample IDs
 instead of `--limit`. Failed sessions have no judge input; do not silently drop

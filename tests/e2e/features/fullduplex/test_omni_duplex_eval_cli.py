@@ -137,6 +137,110 @@ def test_cli_generate_evaluate_summarize_flow(tmp_path: Path, monkeypatch: pytes
     assert summary["pr"]["mean_all_success"] == 1.0
 
 
+def _cached_sample(tmp_path: Path, meta: str | None) -> DuplexSample:
+    sample = DuplexSample.from_row({"id": "sample", "split": "PR_correction"})
+    output = tmp_path / sample.split / f"{sample.id}.json"
+    output.parent.mkdir(parents=True)
+    output.write_text("[]", encoding="utf-8")
+    if meta is not None:
+        output.with_name(f"{sample.id}.meta.json").write_text(meta, encoding="utf-8")
+    return sample
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "meta,mix",
+    [
+        ('{"mix": "question"}', "question"),
+        ('{"mix": "soundtrack"}', "soundtrack"),
+        ("{}", "question"),
+        (None, "question"),
+    ],
+)
+async def test_generate_reuses_cached_sample_for_the_same_mix(tmp_path, monkeypatch, meta, mix):
+    sample = _cached_sample(tmp_path, meta)
+
+    def unexpected_preparation(*args, **kwargs):
+        pytest.fail("a cached sample with the same mix must be reused before preparation")
+
+    monkeypatch.setattr(runner, "prepare_sample", unexpected_preparation)
+    result = await runner.generate_sample(
+        sample,
+        url="ws://unused",
+        model="mock",
+        ref_audio=None,
+        output_root=tmp_path,
+        mix=mix,
+    )
+    assert result.output == tmp_path / sample.split / f"{sample.id}.json"
+    assert result.metadata == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "meta,mix",
+    [
+        ('{"mix": "question"}', "soundtrack"),
+        ('{"mix": "soundtrack"}', "question"),
+        ("{}", "soundtrack"),
+        (None, "soundtrack"),
+    ],
+)
+async def test_generate_refuses_cached_sample_recorded_with_another_mix(tmp_path, monkeypatch, meta, mix):
+    sample = _cached_sample(tmp_path, meta)
+
+    def unexpected_preparation(*args, **kwargs):
+        pytest.fail("a mix mismatch must be rejected before preparation")
+
+    monkeypatch.setattr(runner, "prepare_sample", unexpected_preparation)
+    with pytest.raises(ValueError, match="generated with mix="):
+        await runner.generate_sample(
+            sample,
+            url="ws://unused",
+            model="mock",
+            ref_audio=None,
+            output_root=tmp_path,
+            mix=mix,
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_unknown_mix_before_reusing_cache(tmp_path, monkeypatch):
+    sample = _cached_sample(tmp_path, '{"mix": "question"}')
+
+    def unexpected_preparation(*args, **kwargs):
+        pytest.fail("an unknown mix must be rejected before the cached artifact is reused")
+
+    monkeypatch.setattr(runner, "prepare_sample", unexpected_preparation)
+    with pytest.raises(ValueError, match="mix must be one of"):
+        await runner.generate_sample(
+            sample,
+            url="ws://unused",
+            model="mock",
+            ref_audio=None,
+            output_root=tmp_path,
+            mix="karaoke",
+        )
+
+
+@pytest.mark.asyncio
+async def test_generate_rejects_unreadable_cached_mix(tmp_path, monkeypatch):
+    sample = _cached_sample(tmp_path, "{")
+
+    def unexpected_preparation(*args, **kwargs):
+        pytest.fail("unreadable metadata must be rejected before preparation")
+
+    monkeypatch.setattr(runner, "prepare_sample", unexpected_preparation)
+    with pytest.raises(ValueError, match="cannot read mix"):
+        await runner.generate_sample(
+            sample,
+            url="ws://unused",
+            model="mock",
+            ref_audio=None,
+            output_root=tmp_path,
+        )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cached", [False, True])
 async def test_generate_rejects_unpaced_server_vad_before_preparation_or_cache(tmp_path, monkeypatch, cached):
