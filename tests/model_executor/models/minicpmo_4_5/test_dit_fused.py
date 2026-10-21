@@ -127,3 +127,33 @@ def test_fp16_fused_body_matches_fp16_ragged_body(monkeypatch):
     assert calls, "FP16 service dispatch must use the fused body"
     for want, got in zip(expected, actual, strict=True):
         torch.testing.assert_close(got, want, rtol=2e-3, atol=2e-3)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_cfm_only_fp16_preserves_encoder_precision_and_returns_half_caches():
+    from tests.model_executor.models.minicpmo_4_5.test_code2wav_batching import _FakeToken2Wav
+
+    token2wav = _FakeToken2Wav()
+    token2wav.flow.encoder.register_parameter("anchor", nn.Parameter(torch.ones(1, device="cuda")))
+    token2wav.flow.decoder.estimator = _upstream_dit("cuda")
+    token2wav.flow.decoder.rand_noise = torch.randn(1, 80, 100, device="cuda")
+    backend = BatchedToken2Wav(token2wav, cfm_float16=True)
+    assert not backend.float16
+    assert token2wav.flow.encoder.anchor.dtype == torch.float32
+    assert next(token2wav.flow.decoder.estimator.parameters()).dtype == torch.float16
+    matrix = torch.randn(8, 8, device="cuda")
+    with backend._autocast(matrix.device):
+        assert (matrix @ matrix).dtype == torch.float32
+    with backend._cfm_autocast(matrix.device):
+        assert (matrix @ matrix).dtype == torch.float16
+    assert not torch.is_autocast_enabled("cuda")
+    with torch.inference_mode():
+        mel, cnn, att = backend._decode_cfm(
+            torch.randn(1, 80, 6, device="cuda"),
+            torch.randn(1, 80, device="cuda"),
+            torch.randn(1, 80, 6, device="cuda"),
+            cnn_cache=None,
+            att_cache=None,
+        )
+    assert mel.dtype == cnn.dtype == att.dtype == torch.float16
+    assert token2wav.flow.encoder.anchor.dtype == torch.float32
