@@ -494,17 +494,25 @@ class BatchedToken2Wav(nn.Module):
                 micro_batch_size = int(micro_batch_size_cfg) if micro_batch_size_cfg is not None else 4
                 enable_whole_euler = bool(cfm_graph_cfg.get("enable_whole_euler", True))
                 if bool(cfm_graph_cfg.get("fused_body", False)):
-                    # A reduced-precision attention cache keeps the ragged body,
-                    # which attends in the activation dtype through upstream.
+                    # A BF16 storage-only cache still uses the ragged body.
+                    # CUDA FP16 flow can keep its matching FP16 cache resident.
                     # NPU uses the same schedule with AddLayerNorm and packed QKV.
                     self._ragged_fused_body = (
                         flow_parameter.device.type in {"cuda", "npu"}
                         and supports_fused_body(estimator)
-                        and self._estimator_att_cache_dtype == torch.float32
+                        and (
+                            self._estimator_att_cache_dtype == torch.float32
+                            or (
+                                flow_parameter.device.type == "cuda"
+                                and self._estimator_att_cache_dtype == torch.float16
+                                and self._estimator_att_compute_dtype == torch.float16
+                            )
+                        )
                     )
                     if not self._ragged_fused_body:
                         logger.warning(
-                            "cfm_fused_body requested but unsupported here (DiT blocks or a non-fp32 attention cache)"
+                            "cfm_fused_body requested but unsupported here "
+                            "(DiT blocks or incompatible attention cache dtype)"
                         )
                 # Resident request caches need the fused body and its tiled
                 # attention, which reads keys/values out of the pool in place.

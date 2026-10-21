@@ -44,14 +44,17 @@ def _run(body, estimator, *, rows: int, frames: int, cached: int, lengths):
     channels = estimator.blocks[0].conv.block[1].in_channels
     attn = estimator.blocks[0].attn
     device = next(estimator.parameters()).device
-    estimator_input = torch.randn(rows, 320, frames, device=device)
-    time_embedding = estimator.t_embedder(torch.rand((), device=device).expand(rows)).unsqueeze(1)
+    dtype = next(estimator.parameters()).dtype
+    estimator_input = torch.randn(rows, 320, frames, device=device, dtype=dtype)
+    time_embedding = estimator.t_embedder(torch.rand((), device=device, dtype=dtype).expand(rows)).unsqueeze(1)
     mask = torch.rand(rows, frames, cached + frames, device=device) > 0.3
     mask[..., 0] = True
-    cnn = [torch.randn(rows, 2 * channels, 2, device=device) for _ in range(depth)]
-    att = [torch.randn(rows, attn.num_heads, cached, 2 * attn.head_dim, device=device) for _ in range(depth)]
-    cnn_out = torch.zeros((depth, rows, 2 * channels, 2), device=device)
-    att_out = torch.zeros((depth, rows, attn.num_heads, cached + frames, 2 * attn.head_dim), device=device)
+    cnn = [torch.randn(rows, 2 * channels, 2, device=device, dtype=dtype) for _ in range(depth)]
+    att = [
+        torch.randn(rows, attn.num_heads, cached, 2 * attn.head_dim, device=device, dtype=dtype) for _ in range(depth)
+    ]
+    cnn_out = torch.zeros((depth, rows, 2 * channels, 2), device=device, dtype=dtype)
+    att_out = torch.zeros((depth, rows, attn.num_heads, cached + frames, 2 * attn.head_dim), device=device, dtype=dtype)
     with torch.no_grad():
         out = body(estimator, estimator_input, time_embedding, mask, cnn, att, cnn_out, att_out, lengths)
     return out, cnn_out, att_out
@@ -93,3 +96,20 @@ def test_ragged_body_reuses_modulation_without_recomputing_adaln(monkeypatch, ca
     actual = _run(precomputed, estimator, rows=4, frames=6, cached=cached, lengths=[6, 4])
     for want, got in zip(expected, actual, strict=True):
         torch.testing.assert_close(got, want, rtol=1e-4, atol=2e-5)
+
+
+@pytest.mark.skipif(not torch.cuda.is_available(), reason="requires CUDA")
+def test_fp16_fused_body_matches_fp16_ragged_body():
+    estimator = _upstream_dit("cuda").half()
+    with torch.inference_mode(), torch.autocast("cuda", dtype=torch.float16):
+        expected = _run(
+            BatchedToken2Wav._blocks_forward_chunk_ragged,
+            estimator,
+            rows=4,
+            frames=6,
+            cached=5,
+            lengths=[6, 4],
+        )
+        actual = _run(blocks_forward_chunk_fused, estimator, rows=4, frames=6, cached=5, lengths=[6, 4])
+    for want, got in zip(expected, actual, strict=True):
+        torch.testing.assert_close(got, want, rtol=2e-3, atol=2e-3)
