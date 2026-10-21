@@ -227,6 +227,28 @@ def test_validate_seed_tts_floor_fails_closed_when_score_is_missing():
     assert ok == []
 
 
+def test_seed_tts_floor_rejects_incomplete_sim_and_utmos_coverage():
+    """A mean above the floor must not pass when most utterances were not scored."""
+    partial = {
+        "seed_tts_content_evaluated": 1088,
+        "seed_tts_content_error_mean": 0.02,
+        "seed_tts_turn_count": 1088,
+        "seed_tts_request_failed": 0,
+        "seed_tts_no_pcm": 0,
+        "seed_tts_sim_mean": 0.90,
+        "seed_tts_sim_evaluated": 10,
+        "seed_tts_sim_failed": 1078,
+        "seed_tts_utmos_mean": 3.35,
+        "seed_tts_utmos_evaluated": 10,
+        "seed_tts_utmos_failed": 1078,
+    }
+    errs = _validate_seed_tts(partial, max_mean_wer=0.05, min_mean_sim=0.80, min_mean_utmos=3.10)
+    assert any("seed_tts_sim_evaluated=10" in err and "failed=1078" in err for err in errs)
+    assert any("seed_tts_utmos_evaluated=10" in err and "failed=1078" in err for err in errs)
+    assert not any("seed_tts_sim_mean=0.900000" in err for err in errs)
+    assert not any("seed_tts_utmos_mean=3.350000" in err for err in errs)
+
+
 def test_seed_tts_eval_env_enables_only_configured_floors(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("SEED_TTS_SIM_EVAL", raising=False)
     monkeypatch.delenv("SEED_TTS_UTMOS_EVAL", raising=False)
