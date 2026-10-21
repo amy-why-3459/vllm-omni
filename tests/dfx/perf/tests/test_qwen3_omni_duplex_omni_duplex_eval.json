@@ -18,8 +18,7 @@
         "--max-model-len", "65536",
         "--dtype", "bfloat16",
         "--gpu-memory-utilization", "0.85",
-        "--allowed-local-media-path", "tests/dfx/perf/results",
-        "--served-model-name", "Qwen2.5-VL-7B-Instruct"
+        "--allowed-local-media-path", "tests/dfx/perf/results"
       ]
     },
     "benchmark_params": [

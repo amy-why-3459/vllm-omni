@@ -734,8 +734,11 @@ It differs from the MiniCPM-o configuration in three ways:
   still be eligible. Both subsets require at least one completed response with audio and transcript per case
   (`omniinteract_require_response: true`). Accuracy covers `1q1a_math` only, so it is not comparable with the
   three-subset MiniCPM-o score. Its
-  IA-QTF1 must be at or above `omniinteract_aggregate_min_ia_qtf1` (checked in as `0.3`); a single run on four cases
-  measured `0.50`, so the floor catches a lost correct answer or more, not small judge noise. The job now runs eight cases.
+  IA-QTF1 must be at or above `omniinteract_aggregate_min_ia_qtf1` (checked in as `0.3`).
+  A four-case run measured `0.50`. The job now scores eight cases, and that floor has not been
+  remeasured at eight cases or concurrency 8. If the score tracks per-case correctness the way
+  the four-case run did, one lost answer out of eight lands near `0.375` and still passes `0.3`,
+  so the floor catches about two lost answers, not a single one and not small judge noise.
 - **Latency.** Compare Qwen3-Omni runs on the per-response keys, primarily `mean_duplex_client_ttfp_ms`
   (last append send in the turn window to first audio; on a continuous VAD stream this is about
   `response_created_to_first_audio_ms` plus a `[0, chunk_ms)` phase from the chunk in which server VAD closed the

@@ -564,7 +564,9 @@ Both benchmarks replay recorded clips into one duplex session. Qwen answers
 committed turns, so run them with server VAD turn detection: the client never
 commits, and frames reach Qwen as `input_image` items (it refuses
 `video_frames` on audio appends). Qwen refuses a reference voice, so omit it.
-Serve `vllm_omni/deploy/qwen3_omni_duplex.yaml`. It admits eight duplex sessions.
+Serve `vllm_omni/deploy/qwen3_omni_duplex.yaml`. It admits eight duplex sessions,
+the size of the checked-in CI jobs. Eight-session memory on the 2x H100 layout
+this file targets has not been measured.
 The checked-in OmniInteract jobs run eight cases at `--max-concurrency 8`.
 The checked-in Omni-DuplexEval job replays the same 66 CI sample ids as MiniCPM-o,
 also at `--max-concurrency 8`.
