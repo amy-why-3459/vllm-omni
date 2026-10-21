@@ -387,6 +387,57 @@ async def test_generate_exercises_realtime_socket_and_media_clock(
 
 
 @pytest.mark.asyncio
+async def test_generate_finishes_a_silent_session_on_the_post_commit_listen(tmp_path: Path, monkeypatch):
+    import websockets
+
+    appended = []
+
+    async def handler(websocket):
+        async for raw in websocket:
+            event = json.loads(raw)
+            if event["type"] == "session.update":
+                await websocket.send(json.dumps({"type": "session.created"}))
+            elif event["type"] == "input_audio_buffer.append":
+                appended.append(base64.b64decode(event["audio"]))
+                # A decision for an earlier unit does not end the session.
+                listen = {"type": "response.listen", "response": {"metadata": {"model_listen": True}}}
+                await websocket.send(json.dumps(listen))
+            elif event["type"] == "input_audio_buffer.commit":
+                await websocket.send(json.dumps({"type": "input_audio_buffer.committed"}))
+                await websocket.send(json.dumps(listen))
+            elif event["type"] == "session.close":
+                await websocket.send(json.dumps({"type": "session.closed"}))
+                return
+
+    # Exactly one model unit: the runner keeps a residual for the commit to flush.
+    monkeypatch.setattr(runner, "read_audio_pcm16", lambda path: b"\1\0" * 16_000)
+    monkeypatch.setattr(runner, "video_duration", lambda path: 1.0)
+    monkeypatch.setattr(runner, "iter_jpegs", lambda *args, **kwargs: iter([(0.0, b"jpeg")]))
+    audio = tmp_path / "question.wav"
+    video = tmp_path / "video.mp4"
+    for path in (audio, video):
+        path.write_bytes(b"data")
+    sample = DuplexSample("sample", "PR_post_event_reminder", "pr", "post_event_reminder", video, audio)
+
+    async with websockets.serve(handler, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        result = await runner.generate_sample(
+            sample,
+            url=f"ws://127.0.0.1:{port}/v1/realtime?duplex=1",
+            model="mock",
+            ref_audio=None,
+            output_root=tmp_path / "responses",
+            pace="as-fast-as-possible",
+        )
+
+    assert result.error == ""
+    assert sum(len(chunk) for chunk in appended) == 2 * 16_000 - 2
+    assert json.loads(result.output.read_text(encoding="utf-8")) == {"sentences": [], "chunks": []}
+    meta = json.loads(result.output.with_name("sample.meta.json").read_text(encoding="utf-8"))
+    assert meta["response_done"] is True and meta["drain_timeout"] is None
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("speech_frames,silence_frames", [(35, 19), (36, 16)])
 async def test_generate_server_vad_sends_image_items_and_waits_for_server_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, speech_frames: int, silence_frames: int

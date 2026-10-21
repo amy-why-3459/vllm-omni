@@ -380,6 +380,8 @@ when the track starts later, so the overlay keeps the original timestamps. Use
 or heard in the clip, such as the word-repetition prompts in
 `PR_post_event_reminder` and `RTD_Omni`; a clip without an audio track keeps the
 instruction alone. The standalone `generate` command accepts the same choice as `--mix`.
+The MiniCPM-o Omni-DuplexEval nightly (`tests/dfx/perf/tests/test_minicpmo_4_5_omni_duplex_eval.json`)
+runs with `soundtrack`; the Qwen3-Omni `server_vad` nightly keeps `question`.
 
 Each session decodes its media in a
 worker thread after acquiring a concurrency slot, and releases the decoded input
@@ -415,7 +417,8 @@ and `<id>.meta.json`, using the upstream judge format: RTD scoring reads its
 `sentences`, and PR scoring places its per-output `chunks` (`text`,
 `current_time`) in the 10-second reminder window. A response that is a bare
 sentence list is scored by sentence start. The standalone `generate` command
-refuses to reuse a response that has no `chunks`. Publication occurs after benchmark timing, alongside
+refuses to reuse a proactive-reminder response that has no `chunks`; RTD
+responses are reused from their sentences. Publication occurs after benchmark timing, alongside
 `duplex_metrics.json`; artifact errors are recorded in the saved result's
 `omni_duplex_eval` summary without discarding service measurements.
 
@@ -475,17 +478,22 @@ The standalone `generate` command remains available. It still skips an existing
 sample unless `--overwrite` is set, and it reuses that sample only when the
 recorded mix matches (metadata without a mix counts as `question`). A different
 mix is rejected instead of returning the other artifact. This integration does
-not change scoring rules or enable new nightly jobs.
+not add nightly jobs. The MiniCPM-o job above selects `soundtrack`.
 
 For shuffled runs, use `evaluate --ids` with the successful selected sample IDs
 instead of `--limit`. Failed sessions have no judge input; do not silently drop
 them when reporting coverage or accuracy.
 
-This adapter retains the standalone runner's completion policy: it waits for a
-`response.done`, not an independently correlated final-input acknowledgment.
-A successful transport/session result is therefore not proof that every final
-input produced a response, nor an accuracy score. Final-input lifecycle
-hardening is separate from this entrypoint integration.
+This adapter retains the standalone runner's completion policy. Without
+`server_vad`, a session finishes once every created response has its
+`response.done` and either a response completed or, after the commit, the model
+chose to keep listening (`response.listen` with `model_listen`). The latter is a
+session in which the model never spoke; it publishes empty judge input and scores
+0 instead of failing on the drain timeout. The runner withholds the last PCM sample
+when the clip ends on a model-unit boundary, so the commit always flushes a
+residual unit and that decision covers the end of the clip. A successful
+transport/session result is therefore not proof that every final input produced
+a response, nor an accuracy score.
 
 ### OmniInteract Realtime Benchmark
 

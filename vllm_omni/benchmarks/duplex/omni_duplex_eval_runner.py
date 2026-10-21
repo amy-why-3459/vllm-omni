@@ -215,6 +215,23 @@ def _session_capabilities(client: RealtimeDuplexClient) -> dict[str, object]:
     return {}
 
 
+def _is_model_listen_decision(event: dict[str, object]) -> bool:
+    response = event.get("response")
+    metadata = response.get("metadata") if isinstance(response, dict) else event.get("metadata")
+    return isinstance(metadata, dict) and metadata.get("buffering") is not True and metadata.get("model_listen") is True
+
+
+def _listened_after_commit(events: list[dict[str, object]], start: int) -> bool:
+    """Whether the model chose silence for the final committed input."""
+    committed = False
+    for event in events[start:]:
+        if event.get("type") == "input_audio_buffer.committed":
+            committed = True
+        elif committed and event.get("type") == "response.listen" and _is_model_listen_decision(event):
+            return True
+    return False
+
+
 async def _wait_for_server_turns(client: RealtimeDuplexClient, *, timeout_s: float) -> None:
     """Wait until no server-detected speech or response is open and turns are quiet."""
     deadline = time.monotonic() + timeout_s
@@ -317,6 +334,14 @@ async def generate_sample(
             turn_detection=session_turn_detection(turn_detection),
         )
         frame_transport = select_frame_transport(_session_capabilities(client))
+        if not server_turns:
+            from vllm_omni.clients.duplex import chunk_period_ms, has_residual_model_unit
+
+            # Keep a residual model unit for the commit to flush, so the
+            # model's decision on the end of the clip arrives after the commit.
+            period_ms = chunk_period_ms(client.events.events)
+            if len(pcm) >= PCM16_BYTES_PER_SAMPLE and not has_residual_model_unit(pcm, chunk_period_ms=period_ms):
+                pcm = pcm[:-PCM16_BYTES_PER_SAMPLE]
         image_items = (
             ImageItemWindow(client.send, item_prefix=f"duplexeval_frame_{sample.id}")
             if frame_transport == FRAME_TRANSPORT_IMAGE_ITEMS
@@ -331,10 +356,16 @@ async def generate_sample(
                 frame_sink=image_items.push if image_items is not None else None,
             )
 
+            commit_from = len(client.events.events)
+
             def responses_finished() -> bool:
+                # A session in which the model never speaks is a valid, silent
+                # answer: its final decision is a post-commit listen.
                 client.raise_if_reader_stopped()
-                return client.events.count("response.done") > 0 and all(
-                    client.events.response_is_done(response_id) for response_id in client.events.response_ids
+                if not all(client.events.response_is_done(response_id) for response_id in client.events.response_ids):
+                    return False
+                return client.events.count("response.done") > 0 or _listened_after_commit(
+                    client.events.events, commit_from
                 )
 
             try:
