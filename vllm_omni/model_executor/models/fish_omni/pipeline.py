@@ -33,6 +33,10 @@ FISH_OMNI_PIPELINE = PipelineConfig(
                 # Drama 3 end of speech (config eos_token_id).
                 "stop_token_ids": [248046],
             },
+            # The backbone input sums the codebook embeddings of every sampled
+            # code but codebook 0 (`codebook_sum`, fish_omni_model.py); a replay
+            # from token ids rebuilds only the text part (#6179).
+            recompute_preemption="fail",
         ),
         StagePipelineConfig(
             stage_id=1,
