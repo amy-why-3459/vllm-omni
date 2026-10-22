@@ -22,9 +22,9 @@ from __future__ import annotations
 
 import hashlib
 import os
-import tempfile
 import threading
 from pathlib import Path
+from uuid import uuid4
 
 import torch
 from filelock import FileLock
@@ -55,10 +55,12 @@ def _cpu_reference_onnx(onnx_path: str) -> str:
     digest = hashlib.sha256(Path(onnx_path).read_bytes())
     digest.update(f"|ort{onnxruntime.__version__}|basic-v1".encode())
     target = root / f"campplus_ort_{digest.hexdigest()}.onnx"
+    if target.is_file() and target.stat().st_size:
+        return str(target)
     with FileLock(str(target) + ".lock"):
         if target.is_file() and target.stat().st_size:
             return str(target)
-        fd, temporary = tempfile.mkstemp(dir=root, suffix=".onnx")
+        fd, temporary = _create_cache_temporary(str(target))
         os.close(fd)
         try:
             options = onnxruntime.SessionOptions()
@@ -115,17 +117,26 @@ def _convert_onnx_to_trt(onnx_path: str, plan_path: str, *, allow_tf32: bool = T
     logger.info("Wrote campplus TensorRT engine to %s", plan_path)
 
 
+def _create_cache_temporary(target: str) -> tuple[int, str]:
+    """Create an exclusive sibling using normal file permissions and umask.
+
+    Unlike mkstemp's fixed 0600 mode, O_CREAT with 0666 retains group/read
+    access allowed by the caller's umask without changing process-wide state.
+    """
+    temporary = f"{target}.{uuid4().hex}.tmp"
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+    return descriptor, temporary
+
+
 def _write_plan_atomic(plan_path: str, payload: bytes) -> None:
     """Publish one complete engine.
 
     A fixed ``plan_path + '.tmp'`` is shared by every builder. Two processes
     can interleave writes there and ``os.replace`` a torn plan into place.
     """
-    directory = os.path.dirname(plan_path) or "."
-    descriptor, temporary = tempfile.mkstemp(dir=directory, suffix=".plan")
-    os.close(descriptor)
+    descriptor, temporary = _create_cache_temporary(plan_path)
     try:
-        with open(temporary, "wb") as handle:
+        with os.fdopen(descriptor, "wb") as handle:
             handle.write(payload)
         os.replace(temporary, plan_path)
     finally:
@@ -134,6 +145,8 @@ def _write_plan_atomic(plan_path: str, payload: bytes) -> None:
 
 def _ensure_plan(onnx_path: str, plan_path: str, *, allow_tf32: bool) -> None:
     """Build a missing engine once for every process sharing the plan cache."""
+    if os.path.isfile(plan_path) and os.path.getsize(plan_path):
+        return
     with FileLock(plan_path + ".lock"):
         if not os.path.exists(plan_path) or os.path.getsize(plan_path) == 0:
             _convert_onnx_to_trt(onnx_path, plan_path, allow_tf32=allow_tf32)

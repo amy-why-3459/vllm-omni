@@ -227,6 +227,11 @@ This does not change the independent CFM TF32 policy.
 `COSYVOICE3_TRT_CACHE` controls the derived ONNX and engine cache directory
 (default: `~/.cache/vllm_omni/cosyvoice3_trt`). Derived ONNX files are keyed
 by source content and ONNX Runtime version and published under a file lock.
+Derived graphs and engines are atomically published from uniquely named sibling
+files using normal file-creation permissions (0666 filtered by the process
+umask). Complete cache hits do not acquire a write lock, allowing prebuilt
+caches to be mounted read-only. Cold builds retain a lock and re-check the
+artifact under it; cache misses still require a writable directory.
 Engine keys separate precision policy, device, and TensorRT version. The
 first start builds an engine and can take substantially longer; measure
 startup separately from steady-state serving. Source model files are not

@@ -198,3 +198,40 @@ def test_failed_plan_build_can_be_retried(tmp_path, monkeypatch):
     speaker_embedding_trt._ensure_plan("speaker.onnx", str(plan), allow_tf32=True)
     assert plan.read_bytes() == b"ok"
     assert attempts == 2
+
+
+@pytest.mark.parametrize("artifact", ["plan", "onnx"])
+def test_published_cache_permissions_follow_normal_file_creation(tmp_path, monkeypatch, artifact):
+    """Atomic publication must retain the caller's umask, including group access."""
+    monkeypatch.setenv("COSYVOICE3_TRT_CACHE", str(tmp_path / "cache"))
+    control = tmp_path / "normal-file"
+    control.write_bytes(b"control")
+    if artifact == "plan":
+        target = tmp_path / "campplus.plan"
+        speaker_embedding_trt._write_plan_atomic(str(target), b"engine")
+    else:
+        source = tmp_path / "speaker.onnx"
+        _write_model(source)
+        target = Path(_cpu_reference_onnx(str(source)))
+    assert target.stat().st_mode & 0o777 == control.stat().st_mode & 0o777
+
+
+@pytest.mark.parametrize("artifact", ["plan", "onnx"])
+def test_complete_cache_hit_does_not_require_a_writable_lock(tmp_path, monkeypatch, artifact):
+    monkeypatch.setenv("COSYVOICE3_TRT_CACHE", str(tmp_path / "cache"))
+    source = tmp_path / "speaker.onnx"
+    _write_model(source)
+    if artifact == "onnx":
+        target = Path(_cpu_reference_onnx(str(source)))
+    else:
+        target = tmp_path / "campplus.plan"
+        target.write_bytes(b"complete engine")
+
+    def fail_lock(*args, **kwargs):
+        raise PermissionError("cache mounted read-only")
+
+    monkeypatch.setattr(speaker_embedding_trt, "FileLock", fail_lock)
+    if artifact == "onnx":
+        assert _cpu_reference_onnx(str(source)) == str(target)
+    else:
+        speaker_embedding_trt._ensure_plan(str(source), str(target), allow_tf32=False)
