@@ -111,11 +111,32 @@ def _convert_onnx_to_trt(onnx_path: str, plan_path: str, *, allow_tf32: bool = T
     engine_bytes = builder.build_serialized_network(network, config)
     if engine_bytes is None:
         raise RuntimeError(f"TensorRT failed to build campplus engine from {onnx_path}")
-    tmp = plan_path + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(engine_bytes)
-    os.replace(tmp, plan_path)
+    _write_plan_atomic(plan_path, engine_bytes)
     logger.info("Wrote campplus TensorRT engine to %s", plan_path)
+
+
+def _write_plan_atomic(plan_path: str, payload: bytes) -> None:
+    """Publish one complete engine.
+
+    A fixed ``plan_path + '.tmp'`` is shared by every builder. Two processes
+    can interleave writes there and ``os.replace`` a torn plan into place.
+    """
+    directory = os.path.dirname(plan_path) or "."
+    descriptor, temporary = tempfile.mkstemp(dir=directory, suffix=".plan")
+    os.close(descriptor)
+    try:
+        with open(temporary, "wb") as handle:
+            handle.write(payload)
+        os.replace(temporary, plan_path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def _ensure_plan(onnx_path: str, plan_path: str, *, allow_tf32: bool) -> None:
+    """Build a missing engine once for every process sharing the plan cache."""
+    with FileLock(plan_path + ".lock"):
+        if not os.path.exists(plan_path) or os.path.getsize(plan_path) == 0:
+            _convert_onnx_to_trt(onnx_path, plan_path, allow_tf32=allow_tf32)
 
 
 def _resolve_plan_path(onnx_path: str, prefix: str = "campplus") -> str:
@@ -145,8 +166,7 @@ class CampplusTRT:
 
         self.device = torch.device(device)
         plan_path = _resolve_plan_path(onnx_path, prefix="campplus" if allow_tf32 else "campplus_ieee")
-        if not os.path.exists(plan_path) or os.path.getsize(plan_path) == 0:
-            _convert_onnx_to_trt(onnx_path, plan_path, allow_tf32=allow_tf32)
+        _ensure_plan(onnx_path, plan_path, allow_tf32=allow_tf32)
 
         runtime = trt.Runtime(_trt_logger())
         with open(plan_path, "rb") as f:

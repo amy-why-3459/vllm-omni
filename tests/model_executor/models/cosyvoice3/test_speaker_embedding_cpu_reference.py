@@ -3,6 +3,8 @@
 """Preserve the CPU speaker graph's pooling semantics before TRT conversion."""
 
 import os
+import threading
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -91,3 +93,108 @@ def test_reference_mode_does_not_reuse_the_default_engine(monkeypatch):
     assert original["allow_tf32"] is True
     assert reference["allow_tf32"] is False
     assert original["path"] != reference["path"]
+
+
+def test_plan_publish_replaces_a_private_temp_file(tmp_path, monkeypatch):
+    plan = tmp_path / "campplus.plan"
+    published = []
+    real_replace = os.replace
+
+    def spy_replace(source, destination):
+        published.append(Path(source).name)
+        real_replace(source, destination)
+
+    monkeypatch.setattr(speaker_embedding_trt.os, "replace", spy_replace)
+    speaker_embedding_trt._write_plan_atomic(str(plan), b"engine")
+
+    assert published
+    assert published[0] != f"{plan.name}.tmp"
+    assert plan.read_bytes() == b"engine"
+    assert list(tmp_path.iterdir()) == [plan]
+
+
+def test_failed_plan_publish_leaves_no_partial_file(tmp_path, monkeypatch):
+    plan = tmp_path / "campplus.plan"
+
+    def fail_replace(source, destination):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(speaker_embedding_trt.os, "replace", fail_replace)
+    with pytest.raises(OSError, match="replace failed"):
+        speaker_embedding_trt._write_plan_atomic(str(plan), b"engine")
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_concurrent_plan_publish_keeps_one_complete_payload(tmp_path):
+    plan = tmp_path / "campplus.plan"
+    payloads = [b"A" * 250_000, b"B" * 250_000]
+
+    threads = [
+        threading.Thread(target=speaker_embedding_trt._write_plan_atomic, args=(str(plan), payload))
+        for payload in payloads
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert plan.read_bytes() in payloads
+
+
+def test_shared_plan_cache_builds_once(tmp_path, monkeypatch):
+    plan = tmp_path / "campplus.plan"
+    entered = threading.Event()
+    release = threading.Event()
+    calls = 0
+
+    def slow_convert(onnx_path, plan_path, *, allow_tf32):
+        nonlocal calls
+        calls += 1
+        assert allow_tf32 is False
+        entered.set()
+        assert release.wait(timeout=5)
+        Path(plan_path).write_bytes(b"engine")
+
+    monkeypatch.setattr(speaker_embedding_trt, "_convert_onnx_to_trt", slow_convert)
+    errors = []
+
+    def build():
+        try:
+            speaker_embedding_trt._ensure_plan("speaker.onnx", str(plan), allow_tf32=False)
+        except Exception as exc:  # pragma: no cover - assertion helper
+            errors.append(exc)
+
+    threads = [threading.Thread(target=build) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    assert entered.wait(timeout=5)
+    release.set()
+    for thread in threads:
+        thread.join(timeout=5)
+        assert not thread.is_alive()
+
+    assert errors == []
+    assert calls == 1
+    assert plan.read_bytes() == b"engine"
+
+
+def test_failed_plan_build_can_be_retried(tmp_path, monkeypatch):
+    plan = tmp_path / "campplus.plan"
+    attempts = 0
+
+    def flaky_convert(onnx_path, plan_path, *, allow_tf32):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("build failed")
+        Path(plan_path).write_bytes(b"ok")
+
+    monkeypatch.setattr(speaker_embedding_trt, "_convert_onnx_to_trt", flaky_convert)
+    with pytest.raises(RuntimeError, match="build failed"):
+        speaker_embedding_trt._ensure_plan("speaker.onnx", str(plan), allow_tf32=True)
+    assert not plan.exists()
+
+    speaker_embedding_trt._ensure_plan("speaker.onnx", str(plan), allow_tf32=True)
+    assert plan.read_bytes() == b"ok"
+    assert attempts == 2
