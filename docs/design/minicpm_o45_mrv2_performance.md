@@ -204,26 +204,27 @@ features does not imply warming the CFM setup or achieving lower TTFP.
 
 ## CPU-reference CUDA speaker extraction
 
-`minicpmo_4_5.yaml` sets `token2wav_spk_cpu_reference: true` in connector
-`extra`, together with `token2wav_device_spk: true` and `token2wav_trt: false`.
-On CUDA this selects a TensorRT speaker backend compatible with the CPU ONNX
-reference graph. Other platforms ignore `token2wav_spk_cpu_reference` and keep
-their existing speaker path. On CUDA, `token2wav_device_spk: false` or
-`token2wav_trt: true` still fails at startup. The CAM++ TensorRT profile
-accepts 4 to 3000 fbank frames. The default 6 s window is 598 frames and stays
-on this path. A wider `ref_audio_max_seconds` is checked before the engine is
-installed: 31 s normalizes to 3098 frames and is rejected at startup, rather
-than failing while the first prompt is prepared. It does not change DiT, HiFT,
-sampling or chunk size.
+`token2wav_spk_cpu_reference: true` in connector `extra` selects a CUDA
+TensorRT speaker backend compatible with the CPU ONNX reference graph. The
+knob is commented in `minicpmo_4_5.yaml` and stays off: TensorRT is not a
+baseline dependency, and that file is the duplex profile loaded by CUDA CI
+and perf lanes. Uncomment it only for a measured voice-cloning run. Other
+platforms ignore the flag. An explicit `token2wav_trt: true`,
+`MINICPMO_TOKEN2WAV_TRT=1`, or `token2wav_device_spk: false` keeps the full
+DiT TensorRT path or the CPU onnxruntime fallback and drops this flag.
+The CAM++ TensorRT profile accepts 4 to 3000 fbank frames. The default 6 s
+window is 598 frames and stays on this path. A wider
+`ref_audio_max_seconds` is checked before the engine is installed: 31 s
+normalizes to 3098 frames and is rejected at startup, rather than failing while
+the first prompt is prepared. It does not change DiT, HiFT, sampling or chunk size.
 
-The same default profile sets `cuda_mps: true` under `platforms.cuda`, so
-colocated CUDA stages share a private MPS daemon. NPU does not enable MPS.
-Compare throughput with and without MPS at the target concurrency: improved
-throughput can trade off against first-audio tail latency and low-concurrency
-throughput.
+`cuda_mps: true` under `platforms.cuda` is also commented in that file. It
+starts a private MPS daemon and requires `nvidia-cuda-mps-control`. Leave it
+off for the duplex default: improved throughput can trade off against
+first-audio tail latency and low-concurrency throughput.
 
-Install a TensorRT build matching the CUDA runtime before serving this profile
-on CUDA. For example, the CUDA 13 validation environment uses
+Install a TensorRT build matching the CUDA runtime before enabling the speaker
+flag on CUDA. For example, the CUDA 13 validation environment uses
 `tensorrt-cu13==11.4.0.106`. ONNX Runtime remains required: startup exports
 its BASIC-optimized graph before building the TensorRT engine. CAM++ uses
 zero padding followed by ceil-mode average pooling. ONNX Runtime's PadFusion
@@ -254,5 +255,5 @@ first start builds an engine and can take substantially longer; measure
 startup separately from steady-state serving. Source model files are not
 modified. Revalidate speaker similarity and generated speech quality when
 changing backend versions; floating-point waveform identity is not promised.
-Profiles that inherit `minicpmo_4_5.yaml`, including `minicpmo_4_5_turn.yaml`,
-pick up the same speaker and CUDA MPS settings.
+Uncomment the keys in `minicpmo_4_5.yaml` to opt in; profiles that inherit it,
+including `minicpmo_4_5_turn.yaml`, pick up that choice.

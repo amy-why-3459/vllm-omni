@@ -1590,17 +1590,24 @@ class MiniCPMO45Code2Wav(nn.Module):
         device_spk = read_bool_flag(extra, "token2wav_device_spk", True)
         use_trt = read_bool_flag(extra, "token2wav_trt", False) or (os.environ.get("MINICPMO_TOKEN2WAV_TRT", "") == "1")
         cpu_reference_spk = read_bool_flag(extra, "token2wav_spk_cpu_reference", False)
-        # The default deploy YAML sets this flag. The engine is CUDA-only, so
-        # other platforms keep their existing speaker backend instead of
-        # failing startup on a shared config.
+        # The flag selects a CUDA speaker-only engine. Keep the previous path
+        # when it cannot apply, including explicit overrides that predate it:
+        # full DiT TensorRT and the CPU onnxruntime accuracy fallback.
         if cpu_reference_spk and not current_omni_platform.is_cuda():
             logger.info("MiniCPM-o Code2Wav: ignoring token2wav_spk_cpu_reference off CUDA")
             cpu_reference_spk = False
-        elif cpu_reference_spk and (not device_spk or use_trt):
-            raise ValueError(
-                "token2wav_spk_cpu_reference requires CUDA, token2wav_device_spk=true "
-                "and token2wav_trt=false; it selects speaker-only CPU-reference TensorRT"
+        elif cpu_reference_spk and use_trt:
+            logger.info(
+                "MiniCPM-o Code2Wav: ignoring token2wav_spk_cpu_reference because "
+                "token2wav_trt or MINICPMO_TOKEN2WAV_TRT selects full DiT TensorRT"
             )
+            cpu_reference_spk = False
+        elif cpu_reference_spk and not device_spk:
+            logger.info(
+                "MiniCPM-o Code2Wav: ignoring token2wav_spk_cpu_reference because "
+                "token2wav_device_spk=false selects the CPU onnxruntime fallback"
+            )
+            cpu_reference_spk = False
         # TensorRT is CUDA-only; other platforms ignore the toggle.
         if use_trt and current_omni_platform.is_cuda():
             from vllm_omni.model_executor.models.step_audio2.step_audio2_dit_trt import build_dit_trt_stepper

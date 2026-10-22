@@ -50,6 +50,10 @@ class _FakeToken2Wav:
         self.trt_spk_calls += 1
         self.trt_cpu_reference = cpu_reference
 
+    @property
+    def flow(self):
+        return SimpleNamespace(parameters=lambda: iter([SimpleNamespace(device="cuda")]))
+
 
 class _FakeBackend:
     def __init__(self, token2wav, **kwargs):
@@ -326,19 +330,41 @@ def test_cpu_reference_speaker_is_explicit_cuda_opt_in(tmp_path, monkeypatch, va
     assert token2wav.device_spk_calls == 0
 
 
-@pytest.mark.parametrize(
-    "extra",
-    [{"token2wav_device_spk": False}, {"token2wav_trt": True}],
-)
-def test_cpu_reference_speaker_rejects_conflicting_cuda_settings(tmp_path, monkeypatch, extra):
+def test_device_spk_false_overrides_cpu_reference_speaker(tmp_path, monkeypatch):
+    """The CPU onnxruntime triage switch still wins after the reference flag is set."""
     monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
-    with pytest.raises(ValueError, match="token2wav_spk_cpu_reference requires CUDA"):
-        _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True, **extra})
+    _, token2wav = _build_backend(
+        tmp_path,
+        monkeypatch,
+        {"token2wav_spk_cpu_reference": True, "token2wav_device_spk": False},
+    )
+    assert token2wav.trt_spk_calls == 0
+    assert token2wav.device_spk_calls == 0
+
+
+@pytest.mark.parametrize(
+    "extra,env",
+    [({"token2wav_trt": True}, None), ({}, "1")],
+)
+def test_full_dit_trt_overrides_cpu_reference_speaker(tmp_path, monkeypatch, extra, env):
+    """MINICPMO_TOKEN2WAV_TRT and token2wav_trt keep the full DiT TensorRT path."""
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    if env is None:
+        monkeypatch.delenv("MINICPMO_TOKEN2WAV_TRT", raising=False)
+    else:
+        monkeypatch.setenv("MINICPMO_TOKEN2WAV_TRT", env)
+    from vllm_omni.model_executor.models.step_audio2 import step_audio2_dit_trt
+
+    monkeypatch.setattr(step_audio2_dit_trt, "build_dit_trt_stepper", lambda *args, **kwargs: object())
+    _, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True, **extra})
+    assert token2wav.trt_spk_calls == 1
+    assert token2wav.trt_cpu_reference is False
 
 
 def test_cpu_reference_speaker_is_ignored_off_cuda(tmp_path, monkeypatch):
-    """The shared default YAML sets the flag; NPU must keep its device backend."""
+    """A shared config may set the flag; NPU must keep its device backend."""
     monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: False)
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
     _, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True})
