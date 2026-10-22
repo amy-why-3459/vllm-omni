@@ -148,9 +148,9 @@ stages:
 
 platforms:
   cuda:
-    # Opt-in. Requires nvidia-cuda-mps-control and can raise first-audio tail
-    # latency, so the duplex default does not start a private MPS daemon.
-    # cuda_mps: true
+    # Private MPS for colocated CUDA stages. Requires nvidia-cuda-mps-control.
+    # NPU does not read this block. Set false in an overlay to disable it.
+    cuda_mps: true
     stages:
       - stage_id: 1
         # Full-attention occupancy is bounded by max_num_seqs * max_model_len

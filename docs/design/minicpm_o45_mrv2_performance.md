@@ -218,10 +218,11 @@ window is 598 frames and stays on this path. A wider
 normalizes to 3098 frames and is rejected at startup, rather than failing while
 the first prompt is prepared. It does not change DiT, HiFT, sampling or chunk size.
 
-`cuda_mps: true` under `platforms.cuda` is also commented in that file. It
-starts a private MPS daemon and requires `nvidia-cuda-mps-control`. Leave it
-off for the duplex default: improved throughput can trade off against
-first-audio tail latency and low-concurrency throughput.
+`minicpmo_4_5.yaml` sets `cuda_mps: true` under `platforms.cuda`, so colocated
+CUDA stages share a private MPS daemon. NPU does not enable it. Startup
+requires `nvidia-cuda-mps-control` on CUDA. Set `cuda_mps: false` in an overlay
+to disable it. Improved throughput can trade off against first-audio tail
+latency and low-concurrency throughput.
 
 Install a TensorRT build matching the CUDA runtime before enabling the speaker
 flag on CUDA. For example, the CUDA 13 validation environment uses
@@ -255,5 +256,6 @@ first start builds an engine and can take substantially longer; measure
 startup separately from steady-state serving. Source model files are not
 modified. Revalidate speaker similarity and generated speech quality when
 changing backend versions; floating-point waveform identity is not promised.
-Uncomment the keys in `minicpmo_4_5.yaml` to opt in; profiles that inherit it,
-including `minicpmo_4_5_turn.yaml`, pick up that choice.
+Uncomment `token2wav_spk_cpu_reference` in `minicpmo_4_5.yaml` to opt in.
+Profiles that inherit it, including `minicpmo_4_5_turn.yaml`, also inherit
+`platforms.cuda.cuda_mps: true`.
