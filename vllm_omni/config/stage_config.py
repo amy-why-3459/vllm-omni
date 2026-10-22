@@ -358,6 +358,14 @@ class StagePipelineConfig:
     supports_pending_generation: bool = False
     # Some stateful audio stages cannot roll back already consumed frames.
     supports_running_prefix_cache_reset: bool = True
+    # Recompute preemption (upstream's only mode) frees KV and replays the
+    # prompt. A native-AR stage whose decode step feeds more than the sampled
+    # token into the model -- side-channel codes, per-request hidden state,
+    # vocoder progress -- cannot rebuild that KV from the token stream. Under
+    # ``"fail"`` the scheduler reclaims the request's resources and emits one
+    # terminal error instead of requeuing it, so the caller never receives the
+    # spliced audio the replay would produce.
+    recompute_preemption: Literal["allow", "fail"] = "allow"
     sampling_constraints: dict[str, Any] = field(default_factory=dict)
     custom_process_input_func: str | None = None
     custom_process_next_stage_input_func: str | None = None
@@ -1371,6 +1379,8 @@ def _build_engine_args(
     engine_args["requires_full_payload_input"] = ps.requires_full_payload_input
     if not ps.supports_running_prefix_cache_reset:
         engine_args["supports_running_prefix_cache_reset"] = False
+    if ps.recompute_preemption != "allow":
+        engine_args["recompute_preemption"] = ps.recompute_preemption
     return engine_args
 
 

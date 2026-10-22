@@ -1206,6 +1206,7 @@ def test_sub_config_fields_match_structured_scopes():
         "final_output",
         "supports_running_prefix_cache_reset",
         "supports_pending_generation",
+        "recompute_preemption",
         "active_stream_window",
         "session_mode",
         "duplex_max_sessions",
