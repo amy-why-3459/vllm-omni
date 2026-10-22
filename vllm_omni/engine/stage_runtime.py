@@ -31,7 +31,7 @@ from vllm_omni.distributed.omni_coordinator import (
     RoundRobinBalancer,
 )
 from vllm_omni.engine.arg_utils import is_frontend_only
-from vllm_omni.engine.cuda_mps import CudaMPSServer, physical_gpu_uuid
+from vllm_omni.engine.cuda_mps import CudaMPSServer, CudaMPSUnavailableError, physical_gpu_uuid
 from vllm_omni.engine.messages import (
     EngineQueueMessage,
     RegisterRemoteReplicaMessage,
@@ -590,8 +590,14 @@ class StageRuntime:
     def _validate_mps_topology(self, stage_plans: Sequence[LogicalStageInitPlan]) -> None:
         for plan in stage_plans:
             for replica in plan.replicas:
-                runtime_cfg = getattr(replica.stage_cfg, "runtime_config", getattr(replica.stage_cfg, "runtime", None))
-                if not self._mps_enabled(runtime_cfg):
+                stage_runtime_cfg = getattr(
+                    replica.stage_cfg, "runtime_config", getattr(replica.stage_cfg, "runtime", None)
+                )
+                # Launch reads metadata.runtime_cfg, which may be a per-replica copy.
+                runtime_cfgs = [stage_runtime_cfg]
+                if replica.metadata.runtime_cfg is not stage_runtime_cfg:
+                    runtime_cfgs.append(replica.metadata.runtime_cfg)
+                if not any(self._mps_enabled(cfg) for cfg in runtime_cfgs):
                     continue
                 if replica.launch_mode != "local" or replica.metadata.stage_type == "diffusion":
                     logger.warning(
@@ -599,13 +605,15 @@ class StageRuntime:
                         replica.launch_mode,
                         replica.metadata.stage_type,
                     )
-                    self._disable_cuda_mps(runtime_cfg)
+                    for cfg in runtime_cfgs:
+                        self._disable_cuda_mps(cfg)
                     continue
                 if self._parallel_stage_init:
                     logger.warning(
                         "cuda_mps disabled: parallel_stage_init cannot share the physical GPU initialization lock"
                     )
-                    self._disable_cuda_mps(runtime_cfg)
+                    for cfg in runtime_cfgs:
+                        self._disable_cuda_mps(cfg)
 
     def _mps_environment(self, devices: str | None, runtime_cfg: Any) -> dict[str, str]:
         if not self._mps_enabled(runtime_cfg):
@@ -624,9 +632,7 @@ class StageRuntime:
         if uuid not in self._mps_servers:
             try:
                 self._mps_servers[uuid] = CudaMPSServer(uuid, pipe_directory=pipe_directory)
-            except RuntimeError as exc:
-                if "nvidia-cuda-mps-control" not in str(exc):
-                    raise
+            except CudaMPSUnavailableError as exc:
                 logger.warning("cuda_mps disabled: %s", exc)
                 self._disable_cuda_mps(runtime_cfg)
                 return {}

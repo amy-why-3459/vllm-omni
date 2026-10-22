@@ -149,8 +149,8 @@ stages:
 platforms:
   cuda:
     # Private MPS for colocated CUDA stages. NPU does not read this block.
-    # A missing nvidia-cuda-mps-control binary, parallel stage init, or a
-    # stage that is not one numeric GPU disables MPS and continues. Set false
+    # A missing or failing nvidia-cuda-mps-control daemon, parallel stage
+    # init, or a stage that is not one numeric GPU disables MPS and continues. Set false
     # in an overlay to disable it explicitly.
     cuda_mps: true
     stages:

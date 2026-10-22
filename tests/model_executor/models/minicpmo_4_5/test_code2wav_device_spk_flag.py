@@ -12,7 +12,8 @@ embedding path gets enabled.
 
 from __future__ import annotations
 
-from types import SimpleNamespace
+import sys
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -64,6 +65,12 @@ class _FakeBackend:
     def __init__(self, token2wav, **kwargs):
         self.token2wav = token2wav
         self.kwargs = kwargs
+
+
+@pytest.fixture(autouse=True)
+def tensorrt_importable(monkeypatch):
+    """Backend selection probes ``import tensorrt``; CPU CI images do not ship it."""
+    monkeypatch.setitem(sys.modules, "tensorrt", ModuleType("tensorrt"))
 
 
 @pytest.fixture(params=["cuda", "npu"])
@@ -372,7 +379,7 @@ def test_cpu_reference_speaker_falls_back_without_tensorrt(tmp_path, monkeypatch
     """The default profile stays loadable in images that do not ship TensorRT."""
     monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
     monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
-    monkeypatch.setitem(__import__("sys").modules, "tensorrt", None)
+    monkeypatch.setitem(sys.modules, "tensorrt", None)
     _, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True})
     assert token2wav.trt_spk_calls == 0
     assert token2wav.device_spk_calls == 1

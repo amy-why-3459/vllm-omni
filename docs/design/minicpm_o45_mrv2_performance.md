@@ -223,7 +223,8 @@ the first prompt is prepared. It does not change DiT, HiFT, sampling or chunk si
 `minicpmo_4_5.yaml` sets `cuda_mps: true` under `platforms.cuda`, so colocated
 CUDA stages share a private MPS daemon when `nvidia-cuda-mps-control` is on
 PATH and every stage is one numeric GPU with sequential initialization. NPU
-does not enable it. A missing control binary, `parallel_stage_init`, or a
+does not enable it. A missing control binary, an MPS daemon that fails to
+start or respond, `parallel_stage_init`, or a
 non-numeric / multi-GPU stage disables MPS and continues. Set `cuda_mps: false`
 in an overlay to disable it explicitly. Improved throughput can trade off
 against first-audio tail latency and low-concurrency throughput.

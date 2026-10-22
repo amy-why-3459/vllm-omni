@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import os
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -191,14 +192,17 @@ def test_mps_skips_unsupported_stages(launch_mode, stage_type):
 def test_mps_skips_parallel_initialization():
     runtime = StageRuntime.__new__(StageRuntime)
     runtime._parallel_stage_init = True
-    runtime_cfg = {"cuda_mps": True}
+    stage_runtime_cfg = {"cuda_mps": True}
+    # Legacy Mooncake producers launch from a deepcopy stored on the metadata.
+    launch_runtime_cfg = {"cuda_mps": True, "env": {"VLLM_MOONCAKE_BOOTSTRAP_PORT": "8998"}}
     replica = SimpleNamespace(
-        metadata=SimpleNamespace(stage_type="llm"),
-        stage_cfg=SimpleNamespace(runtime=runtime_cfg),
+        metadata=SimpleNamespace(stage_type="llm", runtime_cfg=launch_runtime_cfg),
+        stage_cfg=SimpleNamespace(runtime=stage_runtime_cfg),
         launch_mode="local",
     )
     runtime._validate_mps_topology([SimpleNamespace(replicas=[replica])])
-    assert runtime_cfg["cuda_mps"] is False
+    assert stage_runtime_cfg["cuda_mps"] is False
+    assert launch_runtime_cfg["cuda_mps"] is False
 
 
 def test_failed_launch_command_still_checks_private_daemon_cleanup(controls):
@@ -206,3 +210,26 @@ def test_failed_launch_command_still_checks_private_daemon_cleanup(controls):
     with pytest.raises(RuntimeError, match="launch failed after fork"):
         cuda_mps.CudaMPSServer("GPU-example")
     assert controls.call_args.kwargs["input"] == "quit\n"
+
+
+@pytest.mark.parametrize(
+    "launch_error",
+    [subprocess.CalledProcessError(1, ["mps-control", "-d"]), subprocess.TimeoutExpired(["mps-control", "-d"], 15)],
+)
+def test_runtime_skips_when_private_daemon_cannot_start(controls, mps_runtime, launch_error):
+    controls.side_effect = [launch_error, SimpleNamespace(stdout="")]
+    config = {"cuda_mps": True}
+    assert mps_runtime._mps_environment("0", config) == {}
+    assert config["cuda_mps"] is False
+    assert mps_runtime._mps_servers == {}
+    pipe = Path(controls.call_args.kwargs["env"]["CUDA_MPS_PIPE_DIRECTORY"])
+    assert controls.call_args.kwargs["input"] == "quit\n"
+    assert not pipe.parent.exists()
+
+
+def test_runtime_skips_unreachable_operator_daemon(controls, mps_runtime):
+    controls.side_effect = subprocess.CalledProcessError(1, ["mps-control"])
+    config = {"cuda_mps": True, "env": {"CUDA_MPS_PIPE_DIRECTORY": "/operator/stage"}}
+    assert mps_runtime._mps_environment("0", config) == {}
+    assert config["cuda_mps"] is False
+    assert controls.call_count == 1
