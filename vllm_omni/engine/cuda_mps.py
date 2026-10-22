@@ -34,6 +34,11 @@ def physical_gpu_uuid(device: str) -> str:
         nvml.nvmlShutdown()
 
 
+def resolve_operator_pipe_directory(pipe_directory: str | None) -> str | None:
+    """None inherits the parent; an explicit empty value selects a private daemon."""
+    return (os.environ.get("CUDA_MPS_PIPE_DIRECTORY") if pipe_directory is None else pipe_directory) or None
+
+
 class CudaMPSUnavailableError(RuntimeError):
     """MPS cannot be used on this host; any private daemon has been cleaned up."""
 
@@ -48,11 +53,7 @@ class CudaMPSServer:
         self._control = control
         self._directory: Path | None = None
         self._closed = False
-        # None inherits the parent; an explicit empty stage value selects a
-        # private daemon even when the parent names an operator-managed one.
-        self.operator_pipe_directory = (
-            os.environ.get("CUDA_MPS_PIPE_DIRECTORY") if pipe_directory is None else pipe_directory
-        ) or None
+        self.operator_pipe_directory = resolve_operator_pipe_directory(pipe_directory)
         if self.operator_pipe_directory:
             self.env = {"CUDA_MPS_PIPE_DIRECTORY": self.operator_pipe_directory, "CUDA_VISIBLE_DEVICES": gpu_uuid}
             try:

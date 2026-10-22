@@ -31,7 +31,12 @@ from vllm_omni.distributed.omni_coordinator import (
     RoundRobinBalancer,
 )
 from vllm_omni.engine.arg_utils import is_frontend_only
-from vllm_omni.engine.cuda_mps import CudaMPSServer, CudaMPSUnavailableError, physical_gpu_uuid
+from vllm_omni.engine.cuda_mps import (
+    CudaMPSServer,
+    CudaMPSUnavailableError,
+    physical_gpu_uuid,
+    resolve_operator_pipe_directory,
+)
 from vllm_omni.engine.messages import (
     EngineQueueMessage,
     RegisterRemoteReplicaMessage,
@@ -210,7 +215,8 @@ class StageRuntime:
         self._replica_launch_lock = threading.Lock()
         self._init_visible_devices_baseline: str | None = None
         self._mps_servers: dict[str, CudaMPSServer] = {}
-        self._mps_unavailable_gpus: set[str] = set()
+        # GPU UUID -> operator pipe (None = private) whose MPS startup failed.
+        self._mps_unavailable_gpus: dict[str, str | None] = {}
 
     @staticmethod
     def _client_addresses_from_zmq(addresses: Any) -> dict[str, str]:
@@ -630,20 +636,25 @@ class StageRuntime:
             else None
         )
         uuid = physical_gpu_uuid(devices.strip())
-        if uuid in self._mps_unavailable_gpus:
-            self._disable_cuda_mps(runtime_cfg)
-            return {}
-        if uuid not in self._mps_servers:
+        server = self._mps_servers.get(uuid)
+        if server is not None:
+            selected_pipe = server.operator_pipe_directory
+        elif uuid in self._mps_unavailable_gpus:
+            selected_pipe = self._mps_unavailable_gpus[uuid]
+        else:
             try:
-                self._mps_servers[uuid] = CudaMPSServer(uuid, pipe_directory=pipe_directory)
+                server = self._mps_servers[uuid] = CudaMPSServer(uuid, pipe_directory=pipe_directory)
             except CudaMPSUnavailableError as exc:
                 logger.warning("cuda_mps disabled for %s: %s", uuid, exc)
-                self._mps_unavailable_gpus.add(uuid)
+                self._mps_unavailable_gpus[uuid] = resolve_operator_pipe_directory(pipe_directory)
                 self._disable_cuda_mps(runtime_cfg)
                 return {}
-        server = self._mps_servers[uuid]
-        if pipe_directory is not None and (pipe_directory or None) != server.operator_pipe_directory:
+            selected_pipe = server.operator_pipe_directory
+        if pipe_directory is not None and (pipe_directory or None) != selected_pipe:
             raise ValueError(f"Conflicting CUDA_MPS_PIPE_DIRECTORY settings for stages sharing GPU {uuid}")
+        if server is None:
+            self._disable_cuda_mps(runtime_cfg)
+            return {}
         return server.env
 
     def _close_mps_servers(self) -> None:

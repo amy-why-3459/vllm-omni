@@ -82,7 +82,7 @@ def mps_runtime(monkeypatch):
 
     runtime = StageRuntime.__new__(StageRuntime)
     runtime._mps_servers = {}
-    runtime._mps_unavailable_gpus = set()
+    runtime._mps_unavailable_gpus = {}
     monkeypatch.setattr(stage_runtime, "physical_gpu_uuid", lambda device: "GPU-example")
     monkeypatch.setattr(stage_runtime.current_omni_platform, "is_cuda", lambda: True)
     yield runtime
@@ -144,6 +144,29 @@ def test_unavailable_gpu_is_not_retried_by_later_stages(controls, mps_runtime):
     assert first["cuda_mps"] is False and second["cuda_mps"] is False
 
 
+@pytest.mark.parametrize(
+    "first_pipe,conflicting_pipe",
+    [("/operator/first", "/operator/other"), ("/operator/first", ""), ("", "/operator/other")],
+)
+def test_unavailable_gpu_still_rejects_conflicting_stage_pipes(controls, mps_runtime, first_pipe, conflicting_pipe):
+    def fail_startup(args, *, input=None, **kwargs):
+        if input == "quit\n":
+            return SimpleNamespace(stdout="")
+        raise subprocess.CalledProcessError(1, args)
+
+    controls.side_effect = fail_startup
+    first = {"cuda_mps": True, "env": {"CUDA_MPS_PIPE_DIRECTORY": first_pipe}}
+    assert mps_runtime._mps_environment("0", first) == {}
+    call_count = controls.call_count
+
+    with pytest.raises(ValueError, match="Conflicting CUDA_MPS_PIPE_DIRECTORY"):
+        mps_runtime._mps_environment("0", {"cuda_mps": True, "env": {"CUDA_MPS_PIPE_DIRECTORY": conflicting_pipe}})
+    inherited = {"cuda_mps": True}
+    assert mps_runtime._mps_environment("0", inherited) == {}
+    assert inherited["cuda_mps"] is False
+    assert controls.call_count == call_count
+
+
 def test_startup_failure_closes_only_the_private_daemon(controls):
     controls.side_effect = [SimpleNamespace(stdout=""), RuntimeError("health failed"), SimpleNamespace(stdout="")]
     with pytest.raises(RuntimeError, match="health failed"):
@@ -156,8 +179,12 @@ def test_runtime_opt_in_and_shared_gpu_ownership(monkeypatch):
 
     runtime = StageRuntime.__new__(StageRuntime)
     runtime._mps_servers = {}
-    runtime._mps_unavailable_gpus = set()
-    create = Mock(return_value=SimpleNamespace(env={"CUDA_VISIBLE_DEVICES": "GPU-example"}, close=Mock()))
+    runtime._mps_unavailable_gpus = {}
+    create = Mock(
+        return_value=SimpleNamespace(
+            env={"CUDA_VISIBLE_DEVICES": "GPU-example"}, close=Mock(), operator_pipe_directory=None
+        )
+    )
     monkeypatch.setattr(stage_runtime, "CudaMPSServer", create)
     monkeypatch.setattr(stage_runtime, "physical_gpu_uuid", lambda device: "GPU-example")
     monkeypatch.setattr(stage_runtime, "current_omni_platform", SimpleNamespace(is_cuda=lambda: True))
