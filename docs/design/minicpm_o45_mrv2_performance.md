@@ -205,11 +205,11 @@ features does not imply warming the CFM setup or achieving lower TTFP.
 ## CPU-reference CUDA speaker extraction
 
 `token2wav_spk_cpu_reference: true` in connector `extra` selects a CUDA
-TensorRT speaker backend compatible with the CPU ONNX reference graph. The
-knob is commented in `minicpmo_4_5.yaml` and stays off: TensorRT is not a
-baseline dependency, and that file is the duplex profile loaded by CUDA CI
-and perf lanes. Uncomment it only for a measured voice-cloning run. Other
-platforms ignore the flag. An explicit `token2wav_trt: true`,
+TensorRT speaker backend compatible with the CPU ONNX reference graph.
+`minicpmo_4_5.yaml` sets it by default, so CUDA CI and perf lanes that load
+this duplex profile need a matching TensorRT build. Set it to `false` in an
+overlay to keep the Torch speaker. Other platforms ignore the flag. An
+explicit `token2wav_trt: true`,
 `MINICPMO_TOKEN2WAV_TRT=1`, or `token2wav_device_spk: false` keeps the full
 DiT TensorRT path or the CPU onnxruntime fallback and drops this flag.
 The CAM++ TensorRT profile accepts 4 to 3000 fbank frames. The default 6 s
@@ -256,6 +256,8 @@ first start builds an engine and can take substantially longer; measure
 startup separately from steady-state serving. Source model files are not
 modified. Revalidate speaker similarity and generated speech quality when
 changing backend versions; floating-point waveform identity is not promised.
-Uncomment `token2wav_spk_cpu_reference` in `minicpmo_4_5.yaml` to opt in.
-Profiles that inherit it, including `minicpmo_4_5_turn.yaml`, also inherit
-`platforms.cuda.cuda_mps: true`.
+
+`minicpmo_4_5.yaml` enables both `token2wav_spk_cpu_reference` and
+`platforms.cuda.cuda_mps`. Profiles that inherit it, including
+`minicpmo_4_5_turn.yaml`, inherit both. Set either key to `false` in an
+overlay to disable that part.

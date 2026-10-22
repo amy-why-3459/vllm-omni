@@ -55,12 +55,12 @@ connectors:
       micro_batch_size: 4
       cfm_precapture_empty_cache: true
       cfm_max_graphs: 32
-      # Opt-in CUDA speaker path: CPU-reference TensorRT, not full DiT TensorRT.
-      # Leave it unset here. TensorRT is not a baseline dependency, and this
-      # duplex profile is what CUDA CI and perf lanes load. Non-CUDA ignores
-      # the flag. token2wav_trt / MINICPMO_TOKEN2WAV_TRT and
-      # token2wav_device_spk: false win when both are set.
-      # token2wav_spk_cpu_reference: true
+      # Default CUDA speaker path: CPU-reference TensorRT, not full DiT TensorRT.
+      # CUDA startup needs a matching TensorRT build. Non-CUDA ignores the
+      # flag. Set false in an overlay to keep the Torch speaker. token2wav_trt /
+      # MINICPMO_TOKEN2WAV_TRT and token2wav_device_spk: false win when both
+      # are set.
+      token2wav_spk_cpu_reference: true
 
 stages:
   - stage_id: 0
