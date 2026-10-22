@@ -580,6 +580,13 @@ class StageRuntime:
             else getattr(runtime_cfg, "cuda_mps", False)
         )
 
+    @staticmethod
+    def _disable_cuda_mps(runtime_cfg: Any) -> None:
+        if isinstance(runtime_cfg, dict):
+            runtime_cfg["cuda_mps"] = False
+        elif runtime_cfg is not None:
+            runtime_cfg.cuda_mps = False
+
     def _validate_mps_topology(self, stage_plans: Sequence[LogicalStageInitPlan]) -> None:
         for plan in stage_plans:
             for replica in plan.replicas:
@@ -587,17 +594,26 @@ class StageRuntime:
                 if not self._mps_enabled(runtime_cfg):
                     continue
                 if replica.launch_mode != "local" or replica.metadata.stage_type == "diffusion":
-                    raise ValueError("cuda_mps currently supports local EngineCore stages only")
-                if self._parallel_stage_init:
-                    raise ValueError(
-                        "cuda_mps requires parallel_stage_init=false for physical GPU initialization locks"
+                    logger.warning(
+                        "cuda_mps disabled: only local EngineCore stages are supported (launch_mode=%s stage_type=%s)",
+                        replica.launch_mode,
+                        replica.metadata.stage_type,
                     )
+                    self._disable_cuda_mps(runtime_cfg)
+                    continue
+                if self._parallel_stage_init:
+                    logger.warning(
+                        "cuda_mps disabled: parallel_stage_init cannot share the physical GPU initialization lock"
+                    )
+                    self._disable_cuda_mps(runtime_cfg)
 
     def _mps_environment(self, devices: str | None, runtime_cfg: Any) -> dict[str, str]:
         if not self._mps_enabled(runtime_cfg):
             return {}
         if not current_omni_platform.is_cuda() or devices is None or len(devices.split(",")) != 1:
-            raise ValueError("cuda_mps currently requires a local CUDA stage on exactly one explicit GPU")
+            logger.warning("cuda_mps disabled: need exactly one explicit CUDA GPU, got %r", devices)
+            self._disable_cuda_mps(runtime_cfg)
+            return {}
         runtime_env = runtime_cfg.get("env") if isinstance(runtime_cfg, Mapping) else getattr(runtime_cfg, "env", None)
         pipe_directory = (
             str(runtime_env["CUDA_MPS_PIPE_DIRECTORY"])
@@ -606,7 +622,14 @@ class StageRuntime:
         )
         uuid = physical_gpu_uuid(devices.strip())
         if uuid not in self._mps_servers:
-            self._mps_servers[uuid] = CudaMPSServer(uuid, pipe_directory=pipe_directory)
+            try:
+                self._mps_servers[uuid] = CudaMPSServer(uuid, pipe_directory=pipe_directory)
+            except RuntimeError as exc:
+                if "nvidia-cuda-mps-control" not in str(exc):
+                    raise
+                logger.warning("cuda_mps disabled: %s", exc)
+                self._disable_cuda_mps(runtime_cfg)
+                return {}
         server = self._mps_servers[uuid]
         if pipe_directory is not None and (pipe_directory or None) != server.operator_pipe_directory:
             raise ValueError(f"Conflicting CUDA_MPS_PIPE_DIRECTORY settings for stages sharing GPU {uuid}")
@@ -683,7 +706,12 @@ class StageRuntime:
             visible_baseline=self._init_visible_devices_baseline,
         )
         if self._mps_enabled(runtime_cfg) and (physical is None or not physical.isdigit()):
-            raise ValueError("cuda_mps requires one numeric physical GPU for initialization locking")
+            logger.warning(
+                "cuda_mps disabled for stage %s: need one numeric physical GPU, got %r",
+                stage_id,
+                physical,
+            )
+            self._disable_cuda_mps(runtime_cfg)
         return physical
 
     # ---- Internal methods ----

@@ -52,7 +52,12 @@ class _FakeToken2Wav:
 
     @property
     def flow(self):
-        return SimpleNamespace(parameters=lambda: iter([SimpleNamespace(device="cuda")]))
+        estimator = SimpleNamespace()
+        decoder = SimpleNamespace(estimator=estimator)
+        return SimpleNamespace(
+            parameters=lambda: iter([SimpleNamespace(device="cuda")]),
+            decoder=decoder,
+        )
 
 
 class _FakeBackend:
@@ -361,6 +366,17 @@ def test_full_dit_trt_overrides_cpu_reference_speaker(tmp_path, monkeypatch, ext
     _, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True, **extra})
     assert token2wav.trt_spk_calls == 1
     assert token2wav.trt_cpu_reference is False
+
+
+def test_cpu_reference_speaker_falls_back_without_tensorrt(tmp_path, monkeypatch):
+    """The default profile stays loadable in images that do not ship TensorRT."""
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
+    monkeypatch.setitem(__import__("sys").modules, "tensorrt", None)
+    _, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True})
+    assert token2wav.trt_spk_calls == 0
+    assert token2wav.device_spk_calls == 1
+    assert token2wav.device_spk_use_trt is False
 
 
 def test_cpu_reference_speaker_is_ignored_off_cuda(tmp_path, monkeypatch):

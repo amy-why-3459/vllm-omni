@@ -1608,6 +1608,15 @@ class MiniCPMO45Code2Wav(nn.Module):
                 "token2wav_device_spk=false selects the CPU onnxruntime fallback"
             )
             cpu_reference_spk = False
+        elif cpu_reference_spk:
+            try:
+                import tensorrt  # noqa: F401
+            except ImportError:
+                logger.warning(
+                    "MiniCPM-o Code2Wav: ignoring token2wav_spk_cpu_reference because "
+                    "tensorrt is not installed; using the Torch speaker"
+                )
+                cpu_reference_spk = False
         # TensorRT is CUDA-only; other platforms ignore the toggle.
         if use_trt and current_omni_platform.is_cuda():
             from vllm_omni.model_executor.models.step_audio2.step_audio2_dit_trt import build_dit_trt_stepper

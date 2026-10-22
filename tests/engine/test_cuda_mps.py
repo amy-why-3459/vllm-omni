@@ -146,13 +146,22 @@ def test_runtime_opt_in_and_shared_gpu_ownership(monkeypatch):
 
 
 @pytest.mark.parametrize("devices", [None, "0,1"])
-def test_runtime_rejects_ambiguous_placement(devices, monkeypatch):
+def test_runtime_skips_ambiguous_placement(devices, monkeypatch):
     from vllm_omni.engine import stage_runtime
 
     runtime = StageRuntime.__new__(StageRuntime)
     monkeypatch.setattr(stage_runtime, "current_omni_platform", SimpleNamespace(is_cuda=lambda: True))
-    with pytest.raises(ValueError, match="exactly one explicit GPU"):
-        runtime._mps_environment(devices, {"cuda_mps": True})
+    config = {"cuda_mps": True}
+    assert runtime._mps_environment(devices, config) == {}
+    assert config["cuda_mps"] is False
+
+
+def test_runtime_skips_when_mps_control_is_missing(monkeypatch, mps_runtime):
+    monkeypatch.setattr(cuda_mps.shutil, "which", lambda name: None)
+    config = {"cuda_mps": True}
+    assert mps_runtime._mps_environment("0", config) == {}
+    assert config["cuda_mps"] is False
+    assert mps_runtime._mps_servers == {}
 
 
 def test_failed_shutdown_preserves_socket_for_retry(controls):
@@ -168,29 +177,28 @@ def test_failed_shutdown_preserves_socket_for_retry(controls):
 
 
 @pytest.mark.parametrize("launch_mode,stage_type", [("remote", "llm"), ("local", "diffusion")])
-def test_mps_rejects_unsupported_stages(launch_mode, stage_type):
+def test_mps_skips_unsupported_stages(launch_mode, stage_type):
     runtime = StageRuntime.__new__(StageRuntime)
     metadata = SimpleNamespace(runtime_cfg={"cuda_mps": True}, stage_type=stage_type)
     stage_cfg = SimpleNamespace(runtime=metadata.runtime_cfg)
     plans = [
         SimpleNamespace(replicas=[SimpleNamespace(metadata=metadata, stage_cfg=stage_cfg, launch_mode=launch_mode)])
     ]
-    with pytest.raises(ValueError, match="local EngineCore"):
-        runtime._validate_mps_topology(plans)
-    metadata.runtime_cfg["cuda_mps"] = False
     runtime._validate_mps_topology(plans)
+    assert metadata.runtime_cfg["cuda_mps"] is False
 
 
-def test_mps_rejects_parallel_initialization():
+def test_mps_skips_parallel_initialization():
     runtime = StageRuntime.__new__(StageRuntime)
     runtime._parallel_stage_init = True
+    runtime_cfg = {"cuda_mps": True}
     replica = SimpleNamespace(
         metadata=SimpleNamespace(stage_type="llm"),
-        stage_cfg=SimpleNamespace(runtime={"cuda_mps": True}),
+        stage_cfg=SimpleNamespace(runtime=runtime_cfg),
         launch_mode="local",
     )
-    with pytest.raises(ValueError, match="parallel_stage_init=false"):
-        runtime._validate_mps_topology([SimpleNamespace(replicas=[replica])])
+    runtime._validate_mps_topology([SimpleNamespace(replicas=[replica])])
+    assert runtime_cfg["cuda_mps"] is False
 
 
 def test_failed_launch_command_still_checks_private_daemon_cleanup(controls):

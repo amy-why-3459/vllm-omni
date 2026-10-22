@@ -206,9 +206,11 @@ features does not imply warming the CFM setup or achieving lower TTFP.
 
 `token2wav_spk_cpu_reference: true` in connector `extra` selects a CUDA
 TensorRT speaker backend compatible with the CPU ONNX reference graph.
-`minicpmo_4_5.yaml` sets it by default, so CUDA CI and perf lanes that load
-this duplex profile need a matching TensorRT build. Set it to `false` in an
-overlay to keep the Torch speaker. Other platforms ignore the flag. An
+`minicpmo_4_5.yaml` sets it by default, so a CUDA host with TensorRT installed
+uses this speaker. If `tensorrt` cannot be imported, startup logs a warning and
+keeps the Torch speaker, so CI images without TensorRT still load this profile.
+Set the flag to `false` in an overlay to keep Torch even when TensorRT is
+installed. Other platforms ignore the flag. An
 explicit `token2wav_trt: true`,
 `MINICPMO_TOKEN2WAV_TRT=1`, or `token2wav_device_spk: false` keeps the full
 DiT TensorRT path or the CPU onnxruntime fallback and drops this flag.
@@ -219,10 +221,12 @@ normalizes to 3098 frames and is rejected at startup, rather than failing while
 the first prompt is prepared. It does not change DiT, HiFT, sampling or chunk size.
 
 `minicpmo_4_5.yaml` sets `cuda_mps: true` under `platforms.cuda`, so colocated
-CUDA stages share a private MPS daemon. NPU does not enable it. Startup
-requires `nvidia-cuda-mps-control` on CUDA. Set `cuda_mps: false` in an overlay
-to disable it. Improved throughput can trade off against first-audio tail
-latency and low-concurrency throughput.
+CUDA stages share a private MPS daemon when `nvidia-cuda-mps-control` is on
+PATH and every stage is one numeric GPU with sequential initialization. NPU
+does not enable it. A missing control binary, `parallel_stage_init`, or a
+non-numeric / multi-GPU stage disables MPS and continues. Set `cuda_mps: false`
+in an overlay to disable it explicitly. Improved throughput can trade off
+against first-audio tail latency and low-concurrency throughput.
 
 Install a TensorRT build matching the CUDA runtime before enabling the speaker
 flag on CUDA. For example, the CUDA 13 validation environment uses
