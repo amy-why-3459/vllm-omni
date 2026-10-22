@@ -327,14 +327,23 @@ def test_cpu_reference_speaker_is_explicit_cuda_opt_in(tmp_path, monkeypatch, va
 
 
 @pytest.mark.parametrize(
-    "cuda,extra",
-    [(False, {}), (True, {"token2wav_device_spk": False}), (True, {"token2wav_trt": True})],
+    "extra",
+    [{"token2wav_device_spk": False}, {"token2wav_trt": True}],
 )
-def test_cpu_reference_speaker_rejects_conflicting_settings(tmp_path, monkeypatch, cuda, extra):
-    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: cuda)
-    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: not cuda)
+def test_cpu_reference_speaker_rejects_conflicting_cuda_settings(tmp_path, monkeypatch, extra):
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: True)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: False)
     with pytest.raises(ValueError, match="token2wav_spk_cpu_reference requires CUDA"):
         _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True, **extra})
+
+
+def test_cpu_reference_speaker_is_ignored_off_cuda(tmp_path, monkeypatch):
+    """The shared default YAML sets the flag; NPU must keep its device backend."""
+    monkeypatch.setattr(current_omni_platform, "is_cuda", lambda: False)
+    monkeypatch.setattr(current_omni_platform, "is_npu", lambda: True)
+    _, token2wav = _build_backend(tmp_path, monkeypatch, {"token2wav_spk_cpu_reference": True})
+    assert token2wav.trt_spk_calls == 0
+    assert token2wav.device_spk_calls == 1
 
 
 @pytest.mark.parametrize("cpu_reference", [False, True])

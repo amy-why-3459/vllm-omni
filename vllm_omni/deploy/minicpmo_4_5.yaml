@@ -55,6 +55,11 @@ connectors:
       micro_batch_size: 4
       cfm_precapture_empty_cache: true
       cfm_max_graphs: 32
+      # CUDA speaker path: CPU-reference TensorRT, not full DiT TensorRT.
+      # Non-CUDA platforms ignore token2wav_spk_cpu_reference.
+      token2wav_device_spk: true
+      token2wav_spk_cpu_reference: true
+      token2wav_trt: false
 
 stages:
   - stage_id: 0
@@ -142,6 +147,9 @@ stages:
 
 platforms:
   cuda:
+    # Private MPS for colocated stages. Kept on the CUDA platform block so
+    # NPU and other platforms do not start an NVIDIA MPS daemon.
+    cuda_mps: true
     stages:
       - stage_id: 1
         # Full-attention occupancy is bounded by max_num_seqs * max_model_len

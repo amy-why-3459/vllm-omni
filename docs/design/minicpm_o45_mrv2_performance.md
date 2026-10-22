@@ -202,25 +202,33 @@ conservative default until cold and warm end-to-end TTFP/RTF measurements
 justify a change. Setup prefetch remains a separate opt-in; warming prompt
 features does not imply warming the CFM setup or achieving lower TTFP.
 
-## Opt-in CPU-reference CUDA speaker extraction
+## CPU-reference CUDA speaker extraction
 
-For turn-mode voice cloning, `token2wav_spk_cpu_reference: true` in connector
-`extra` selects a CUDA TensorRT speaker backend compatible with the CPU ONNX
-reference graph. The default device speaker backend remains Torch. This opt-in
-requires CUDA, `token2wav_device_spk: true` and `token2wav_trt: false`; conflicting
-settings fail at startup. The CAM++ TensorRT profile accepts 4 to 3000 fbank
-frames. The default 6 s window is 598 frames and stays on this path. A wider
-`ref_audio_max_seconds` is checked before the engine is installed: 31 s
-normalizes to 3098 frames and is rejected at startup, rather than failing while
-the first prompt is prepared. It does not change DiT, HiFT, sampling or chunk size.
+`minicpmo_4_5.yaml` sets `token2wav_spk_cpu_reference: true` in connector
+`extra`, together with `token2wav_device_spk: true` and `token2wav_trt: false`.
+On CUDA this selects a TensorRT speaker backend compatible with the CPU ONNX
+reference graph. Other platforms ignore `token2wav_spk_cpu_reference` and keep
+their existing speaker path. On CUDA, `token2wav_device_spk: false` or
+`token2wav_trt: true` still fails at startup. The CAM++ TensorRT profile
+accepts 4 to 3000 fbank frames. The default 6 s window is 598 frames and stays
+on this path. A wider `ref_audio_max_seconds` is checked before the engine is
+installed: 31 s normalizes to 3098 frames and is rejected at startup, rather
+than failing while the first prompt is prepared. It does not change DiT, HiFT,
+sampling or chunk size.
 
-Install a TensorRT build matching the CUDA runtime before enabling this
-option. For example, the CUDA 13 validation environment uses
+The same default profile sets `cuda_mps: true` under `platforms.cuda`, so
+colocated CUDA stages share a private MPS daemon. NPU does not enable MPS.
+Compare throughput with and without MPS at the target concurrency: improved
+throughput can trade off against first-audio tail latency and low-concurrency
+throughput.
+
+Install a TensorRT build matching the CUDA runtime before serving this profile
+on CUDA. For example, the CUDA 13 validation environment uses
 `tensorrt-cu13==11.4.0.106`. ONNX Runtime remains required: startup exports
 its BASIC-optimized graph before building the TensorRT engine. CAM++ uses
 zero padding followed by ceil-mode average pooling. ONNX Runtime's PadFusion
 changes the partial-window denominator; converting the original graph
-directly would not reproduce the existing CPU reference. The CUDA opt-in
+directly would not reproduce the existing CPU reference. This path
 uses the optimized graph and disables TensorRT TF32 for speaker extraction.
 This does not change the independent CFM TF32 policy.
 
@@ -246,24 +254,5 @@ first start builds an engine and can take substantially longer; measure
 startup separately from steady-state serving. Source model files are not
 modified. Revalidate speaker similarity and generated speech quality when
 changing backend versions; floating-point waveform identity is not promised.
-
-An overlay for the default turn profile is:
-
-```yaml
-base_config: minicpmo_4_5_turn.yaml
-connectors:
-  connector_of_shared_memory:
-    extra:
-      token2wav_spk_cpu_reference: true
-```
-
-Place the overlay beside the base deploy YAML, or use an absolute base path.
-Use `--deploy-config` to select it. Evaluate concurrency, throughput, first
-audio latency, RTF, and speech quality against the same base profile and
-reference-audio workload before adopting it.
-
-`minicpmo_4_5_cpu_reference_trt_mps.yaml` combines this opt-in with private
-CUDA MPS for colocated turn-mode stages. Select it explicitly with
-`--deploy-config`; it is not the default profile. Compare it with and without
-MPS at the target concurrency: improved throughput can trade off against
-first-audio tail latency and low-concurrency throughput.
+Profiles that inherit `minicpmo_4_5.yaml`, including `minicpmo_4_5_turn.yaml`,
+pick up the same speaker and CUDA MPS settings.
