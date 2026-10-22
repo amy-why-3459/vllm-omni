@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -81,6 +82,7 @@ def mps_runtime(monkeypatch):
 
     runtime = StageRuntime.__new__(StageRuntime)
     runtime._mps_servers = {}
+    runtime._mps_unavailable_gpus = set()
     monkeypatch.setattr(stage_runtime, "physical_gpu_uuid", lambda device: "GPU-example")
     monkeypatch.setattr(stage_runtime.current_omni_platform, "is_cuda", lambda: True)
     yield runtime
@@ -120,6 +122,28 @@ def test_runtime_rejects_conflicting_explicit_stage_pipes(controls, mps_runtime,
     assert controls.call_count == call_count
 
 
+def test_failed_startup_cleanup_is_not_reported_as_unavailable(controls):
+    launch_error = subprocess.TimeoutExpired(["mps-control", "-d"], 15)
+    controls.side_effect = [launch_error, subprocess.TimeoutExpired(["mps-control"], 15)]
+    with pytest.raises(subprocess.TimeoutExpired) as raised:
+        cuda_mps.CudaMPSServer("GPU-example")
+    assert raised.value is launch_error
+    assert not isinstance(raised.value, cuda_mps.CudaMPSUnavailableError)
+    pipe = Path(controls.call_args.kwargs["env"]["CUDA_MPS_PIPE_DIRECTORY"])
+    assert pipe.is_dir()
+    shutil.rmtree(pipe.parent)
+
+
+def test_unavailable_gpu_is_not_retried_by_later_stages(controls, mps_runtime):
+    controls.side_effect = [subprocess.CalledProcessError(1, ["mps-control", "-d"]), SimpleNamespace(stdout="")]
+    first, second = {"cuda_mps": True}, {"cuda_mps": True}
+    assert mps_runtime._mps_environment("0", first) == {}
+    call_count = controls.call_count
+    assert mps_runtime._mps_environment("0", second) == {}
+    assert controls.call_count == call_count
+    assert first["cuda_mps"] is False and second["cuda_mps"] is False
+
+
 def test_startup_failure_closes_only_the_private_daemon(controls):
     controls.side_effect = [SimpleNamespace(stdout=""), RuntimeError("health failed"), SimpleNamespace(stdout="")]
     with pytest.raises(RuntimeError, match="health failed"):
@@ -132,6 +156,7 @@ def test_runtime_opt_in_and_shared_gpu_ownership(monkeypatch):
 
     runtime = StageRuntime.__new__(StageRuntime)
     runtime._mps_servers = {}
+    runtime._mps_unavailable_gpus = set()
     create = Mock(return_value=SimpleNamespace(env={"CUDA_VISIBLE_DEVICES": "GPU-example"}, close=Mock()))
     monkeypatch.setattr(stage_runtime, "CudaMPSServer", create)
     monkeypatch.setattr(stage_runtime, "physical_gpu_uuid", lambda device: "GPU-example")

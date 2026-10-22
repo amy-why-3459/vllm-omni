@@ -210,6 +210,7 @@ class StageRuntime:
         self._replica_launch_lock = threading.Lock()
         self._init_visible_devices_baseline: str | None = None
         self._mps_servers: dict[str, CudaMPSServer] = {}
+        self._mps_unavailable_gpus: set[str] = set()
 
     @staticmethod
     def _client_addresses_from_zmq(addresses: Any) -> dict[str, str]:
@@ -629,11 +630,15 @@ class StageRuntime:
             else None
         )
         uuid = physical_gpu_uuid(devices.strip())
+        if uuid in self._mps_unavailable_gpus:
+            self._disable_cuda_mps(runtime_cfg)
+            return {}
         if uuid not in self._mps_servers:
             try:
                 self._mps_servers[uuid] = CudaMPSServer(uuid, pipe_directory=pipe_directory)
             except CudaMPSUnavailableError as exc:
-                logger.warning("cuda_mps disabled: %s", exc)
+                logger.warning("cuda_mps disabled for %s: %s", uuid, exc)
+                self._mps_unavailable_gpus.add(uuid)
                 self._disable_cuda_mps(runtime_cfg)
                 return {}
         server = self._mps_servers[uuid]

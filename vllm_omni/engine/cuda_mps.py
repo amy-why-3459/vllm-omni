@@ -78,10 +78,13 @@ class CudaMPSServer:
         except BaseException as exc:
             # A failed/timed-out launcher may already have forked the daemon.
             # Always address our private socket; keep it if cleanup also fails.
+            # Only report "unavailable" once nothing is left running: if cleanup
+            # fails the daemon may be orphaned, so startup must fail loudly.
             try:
                 self.close()
             except Exception:
                 logger.exception("MPS startup cleanup failed; control files remain at %s", root)
+                raise exc from None
             if isinstance(exc, (OSError, subprocess.SubprocessError)):
                 raise CudaMPSUnavailableError(f"private MPS daemon failed to start: {exc}") from exc
             raise
