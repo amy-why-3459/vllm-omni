@@ -201,19 +201,22 @@ def test_failed_plan_build_can_be_retried(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("artifact", ["plan", "onnx"])
-def test_published_cache_permissions_follow_normal_file_creation(tmp_path, monkeypatch, artifact):
-    """Atomic publication must retain the caller's umask, including group access."""
+@pytest.mark.parametrize("mask,expected_mode", [(0o022, 0o644), (0o002, 0o664), (0o077, 0o600)])
+def test_published_cache_permissions_follow_normal_file_creation(tmp_path, monkeypatch, artifact, mask, expected_mode):
+    """Exercise shared and private permissions independently of the runner's umask."""
     monkeypatch.setenv("COSYVOICE3_TRT_CACHE", str(tmp_path / "cache"))
-    control = tmp_path / "normal-file"
-    control.write_bytes(b"control")
-    if artifact == "plan":
-        target = tmp_path / "campplus.plan"
-        speaker_embedding_trt._write_plan_atomic(str(target), b"engine")
-    else:
-        source = tmp_path / "speaker.onnx"
-        _write_model(source)
-        target = Path(_cpu_reference_onnx(str(source)))
-    assert target.stat().st_mode & 0o777 == control.stat().st_mode & 0o777
+    previous_mask = os.umask(mask)
+    try:
+        if artifact == "plan":
+            target = tmp_path / "campplus.plan"
+            speaker_embedding_trt._write_plan_atomic(str(target), b"engine")
+        else:
+            source = tmp_path / "speaker.onnx"
+            _write_model(source)
+            target = Path(_cpu_reference_onnx(str(source)))
+        assert target.stat().st_mode & 0o777 == expected_mode
+    finally:
+        os.umask(previous_mask)
 
 
 @pytest.mark.parametrize("artifact", ["plan", "onnx"])

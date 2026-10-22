@@ -229,10 +229,19 @@ This does not change the independent CFM TF32 policy.
 by source content and ONNX Runtime version and published under a file lock.
 Derived graphs and engines are atomically published from uniquely named sibling
 files using normal file-creation permissions (0666 filtered by the process
-umask). Complete cache hits do not acquire a write lock, allowing prebuilt
-caches to be mounted read-only. Cold builds retain a lock and re-check the
-artifact under it; cache misses still require a writable directory.
-Engine keys separate precision policy, device, and TensorRT version. The
+umask). Complete cache hits do not acquire a write lock. A prebuilt cache
+can be mounted read-only only when its derived ONNX and engine keys still
+match. Engine keys include the ONNX absolute path, size and integer-second
+mtime, as well as precision policy, device name and TensorRT version. For
+CPU-reference mode, this ONNX is the derived file inside the cache directory:
+keep the same absolute mount path and preserve file mtimes when copying the
+cache (for example, with `cp -a`). The source content and ONNX Runtime version
+must also match to select the same derived ONNX. Relocating the cache or
+changing mtimes produces a cache miss, even with identical model bytes.
+Cold builds retain a lock and re-check the artifact under it; misses on a
+read-only mount can raise `PermissionError` when acquiring the build lock.
+Prebuild in a writable cache at the final path before mounting it read-only,
+or provide a writable cache directory for rebuilding. The
 first start builds an engine and can take substantially longer; measure
 startup separately from steady-state serving. Source model files are not
 modified. Revalidate speaker similarity and generated speech quality when
