@@ -148,15 +148,22 @@ def test_rejects_dense_backbone_layer():
         _config(mlp_layer_types=["moe"] * 39 + ["dense"])
 
 
-def test_tensor_and_expert_parallel_are_allowed():
+def test_tensor_parallel_is_allowed_on_npu_only(monkeypatch):
     from types import SimpleNamespace
 
-    from vllm_omni.model_executor.models.fish_omni.fish_omni_model import _reject_unsupported_fish_parallel
+    import vllm_omni.model_executor.models.fish_omni.fish_omni_model as fish_model
 
-    _reject_unsupported_fish_parallel(
-        SimpleNamespace(pipeline_parallel_size=1, prefill_context_parallel_size=1, tensor_parallel_size=2)
-    )
+    parallel = SimpleNamespace(pipeline_parallel_size=1, prefill_context_parallel_size=1, tensor_parallel_size=2)
+    monkeypatch.setattr(fish_model, "current_platform", SimpleNamespace(device_type="npu"))
+    fish_model._reject_unsupported_fish_parallel(parallel)
+    monkeypatch.setattr(fish_model, "current_platform", SimpleNamespace(device_type="cuda"))
+    with pytest.raises(NotImplementedError, match="tensor parallel"):
+        fish_model._reject_unsupported_fish_parallel(parallel)
     with pytest.raises(NotImplementedError, match="one pipeline rank"):
-        _reject_unsupported_fish_parallel(SimpleNamespace(pipeline_parallel_size=2, prefill_context_parallel_size=1))
+        fish_model._reject_unsupported_fish_parallel(
+            SimpleNamespace(pipeline_parallel_size=2, prefill_context_parallel_size=1)
+        )
     with pytest.raises(NotImplementedError, match="prefill context"):
-        _reject_unsupported_fish_parallel(SimpleNamespace(pipeline_parallel_size=1, prefill_context_parallel_size=2))
+        fish_model._reject_unsupported_fish_parallel(
+            SimpleNamespace(pipeline_parallel_size=1, prefill_context_parallel_size=2)
+        )

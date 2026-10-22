@@ -169,15 +169,16 @@ class FishOmniBuffers:
 def _install_npu_eager_qk_rope() -> None:
     """Keep Qwen3.5 attention off the fused Triton kernel on Ascend.
 
-    The codebook tower selects the torch implementation itself. This only
-    stops the backbone from taking the same kernel when the platform is
-    reported as CUDA-like inside the worker.
+    The codebook tower selects the torch implementation itself. The backbone
+    takes upstream's non-fused branch: forcing the flag off in ``__init__``
+    means forward never calls ``fused_qk_rmsnorm_rope_gate``. The NPU worker
+    reports a CUDA-like platform, so the stock constructor would otherwise
+    enable that kernel. The patch is process-wide on ``Qwen3NextAttention``;
+    this stage process builds the Drama 3 backbone, and the Triton kernel is
+    not valid on Ascend.
     """
     import vllm.model_executor.models.qwen3_next as qwen_next
 
-    from vllm_omni.model_executor.models.fish_omni.kernels import eager_qk_rmsnorm_rope_gate
-
-    qwen_next.fused_qk_rmsnorm_rope_gate = eager_qk_rmsnorm_rope_gate
     attention = qwen_next.Qwen3NextAttention
     if getattr(attention.__init__, "_fish_omni_npu_eager", False):
         return
@@ -189,17 +190,22 @@ def _install_npu_eager_qk_rope() -> None:
 
     _eager_qk_rope_init._fish_omni_npu_eager = True
     attention.__init__ = _eager_qk_rope_init
+    logger.info("fish_omni: Qwen3.5 attention stays on the non-fused QK-norm RoPE path on NPU")
 
 
 def _reject_unsupported_fish_parallel(parallel_config: Any) -> None:
     """Drama 3 can shard the Qwen3.5 backbone (tensor parallel) and its routed
-    experts (expert parallel). Pipeline and prefill-context parallelism are not
-    wired through the Omni V2 runner.
+    experts (expert parallel) on NPU. CUDA tensor parallel, pipeline parallel,
+    and prefill-context parallelism are not wired through the Omni V2 runner.
     """
     if parallel_config.pipeline_parallel_size != 1:
         raise NotImplementedError("fish_omni runs with one pipeline rank")
     if getattr(parallel_config, "prefill_context_parallel_size", 1) != 1:
         raise NotImplementedError("fish_omni does not support prefill context parallelism")
+    # Packed GDN decode, the replicated tower, and the per-step noise broadcast
+    # have been run at TP=2 only on NPU. CUDA stays single-rank until then.
+    if parallel_config.tensor_parallel_size != 1 and current_platform.device_type != "npu":
+        raise NotImplementedError("fish_omni tensor parallel is supported on NPU only")
 
 
 # The tower and frame sampling compile with the backbone (its own decorator
@@ -240,19 +246,6 @@ class FishOmniForConditionalGeneration(nn.Module, HasInnerState, IsHybrid):
             # profile both miss the fused Triton kernel.
             _install_npu_eager_qk_rope()
         self.model = Qwen3_5Model(vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model"))
-        if current_platform.device_type == "npu":
-
-            def _force_eager_qk(module, inputs):
-                module.use_fused_qk_norm_rope_gate = False
-
-            armed = 0
-            for module in self.model.modules():
-                if not hasattr(module, "use_fused_qk_norm_rope_gate"):
-                    continue
-                module.use_fused_qk_norm_rope_gate = False
-                module.register_forward_pre_hook(_force_eager_qk)
-                armed += 1
-            logger.info("fish_omni: eager QK-norm RoPE on NPU (%d attention modules)", armed)
         # Triton tower / GDN kernels build on CUDA and ROCm; Ascend patches the Qwen class itself.
         if current_platform.is_cuda_alike():
             if vllm_config.speculative_config is None:

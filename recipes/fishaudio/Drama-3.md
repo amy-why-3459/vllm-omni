@@ -179,11 +179,13 @@ Throughput is seconds of audio generated per wall-clock second.
 ### 2x Ascend 910B 64GB
 
 Stage 0 (backbone + codebook tower) uses Model Runner V2 on both cards:
-tensor parallel 2 and expert parallel, eager. The NPU AR runner builds Ascend
-input state (`AscendInputBatch` with `attn_state` and `seq_lens_np`) and the
-model state builds Ascend attention metadata. Gated-delta-net stays on the
-Ascend implementation. The codebook tower uses the eager norm and sampling
-path. Stage 1 (DAC) shares the second card, eager, without CUDA graphs or MPS.
+tensor parallel 2 and expert parallel, replaying piecewise ACL graphs
+(`enforce_eager: false`, `cudagraph_mode: PIECEWISE`). The NPU AR runner builds
+Ascend input state (`AscendInputBatch` with `attn_state` and `seq_lens_np`)
+and the model state builds Ascend attention metadata. Gated-delta-net stays on
+the Ascend implementation. The codebook tower uses the eager norm and sampling
+path. Stage 1 (DAC) shares the second card and stays eager, without ACL graphs
+or MPS.
 Sampling noise is broadcast from tensor-parallel rank 0 so both ranks draw
 the same frame.
 
@@ -192,7 +194,8 @@ ASCEND_RT_VISIBLE_DEVICES=0,1 vllm serve fishaudio/drama-3 --omni --port 8091
 ```
 
 `vllm_omni/deploy/fish_omni.yaml` applies this `npu` profile automatically
-(`tensor_parallel_size: 2`, `enable_expert_parallel: true`, `max_num_seqs: 8`).
+(`tensor_parallel_size: 2`, `enable_expert_parallel: true`, `max_num_seqs: 64`,
+stage 0 `enforce_eager: false`).
 Stage 0 reserves 0.72 of each card and stage 1 reserves 0.10 of the second
 card. The speech request is the same as the GPU section.
 

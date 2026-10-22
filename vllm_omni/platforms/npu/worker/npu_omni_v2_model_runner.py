@@ -28,9 +28,11 @@ logger = init_logger(__name__)
 def _call_without_unknown_kwargs(function: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
     """Drop keyword arguments ``function`` does not accept.
 
-    vLLM-Ascend's V2 KV-cache init passes ``attn_cg_support`` into
-    ``maybe_create_adaptive_verification_manager``. The vLLM build on this
-    host takes that information as ``additional_attn_cg_support`` only.
+    vLLM 0.32 takes graph-support info as ``additional_attn_cg_support``.
+    vLLM-Ascend v0.30 also passed ``attn_cg_support``, a different object
+    (the narrowed backend support). That name is obsolete and is dropped.
+    Renaming it onto ``additional_attn_cg_support`` would overwrite the tuple
+    the caller already passes under the accepted name.
     """
     import inspect
 

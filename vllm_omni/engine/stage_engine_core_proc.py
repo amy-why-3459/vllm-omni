@@ -58,6 +58,21 @@ def _install_ascend_mamba_prefill_end_compat() -> None:
     current = AscendMambaManager.get_num_blocks_to_allocate
     if getattr(current, "_omni_accepts_prefill_end", False):
         return
+    # Current vLLM-Ascend accepts ``prefill_end`` and uses it. Wrapping those
+    # builds would drop the argument and change the block count. Only the
+    # older signature, which raises on the keyword, needs this shim.
+    import inspect
+
+    try:
+        parameters = inspect.signature(current).parameters
+    except (TypeError, ValueError):
+        accepts_prefill_end = False
+    else:
+        accepts_prefill_end = "prefill_end" in parameters or any(
+            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+        )
+    if accepts_prefill_end:
+        return
 
     def get_num_blocks_to_allocate(self, *args: Any, prefill_end: int = 0, **kwargs: Any) -> int:
         del prefill_end

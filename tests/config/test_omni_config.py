@@ -996,7 +996,7 @@ def test_fish_omni_npu_profile_is_mrv2_tp_ep():
     assert stage0.model_runner == "v2"
     assert stage0.tensor_parallel_size == 2
     assert stage0.enable_expert_parallel is True
-    assert stage0.enforce_eager is True
+    assert stage0.enforce_eager is False
     assert stage0.gpu_memory_utilization == 0.72
     assert stage0.devices == "0,1"
     assert stage1.model_runner == "v1"

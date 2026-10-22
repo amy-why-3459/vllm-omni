@@ -6,6 +6,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytest.importorskip("vllm_ascend")
+
 from vllm_omni.platforms.npu.worker.npu_omni_v2_model_runner import (
     resolve_registered_moe_comm_method,
     v2_extra_forward_attr,
