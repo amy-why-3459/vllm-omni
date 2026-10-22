@@ -190,7 +190,31 @@ def _install_npu_eager_qk_rope() -> None:
 
     _eager_qk_rope_init._fish_omni_npu_eager = True
     attention.__init__ = _eager_qk_rope_init
-    logger.info("fish_omni: Qwen3.5 attention stays on the non-fused QK-norm RoPE path on NPU")
+
+
+def _require_npu_eager_qk_rope(model: Any) -> None:
+    """Fail if any module still takes the fused Triton QK-norm path.
+
+    The ``__init__`` patch covers ``Qwen3NextAttention``. A subclass that sets
+    the flag again after ``super().__init__``, or a different class that owns
+    the same flag, would otherwise reach the Triton kernel on Ascend. One
+    check after construction keeps that guarantee without a forward hook
+    inside the compiled region.
+    """
+    enabled: list[str] = []
+    armed = 0
+    for module in model.modules():
+        if not hasattr(module, "use_fused_qk_norm_rope_gate"):
+            continue
+        armed += 1
+        if module.use_fused_qk_norm_rope_gate:
+            enabled.append(type(module).__name__)
+    if enabled:
+        names = ", ".join(sorted(set(enabled)))
+        raise RuntimeError(
+            f"fish_omni: fused QK-norm RoPE stayed enabled on NPU ({names}). The Triton kernel is not valid on Ascend."
+        )
+    logger.info("fish_omni: eager QK-norm RoPE on NPU (%d attention modules)", armed)
 
 
 def _reject_unsupported_fish_parallel(parallel_config: Any) -> None:
@@ -246,6 +270,8 @@ class FishOmniForConditionalGeneration(nn.Module, HasInnerState, IsHybrid):
             # profile both miss the fused Triton kernel.
             _install_npu_eager_qk_rope()
         self.model = Qwen3_5Model(vllm_config=vllm_config, prefix=maybe_prefix(prefix, "model"))
+        if current_platform.device_type == "npu":
+            _require_npu_eager_qk_rope(self.model)
         # Triton tower / GDN kernels build on CUDA and ROCm; Ascend patches the Qwen class itself.
         if current_platform.is_cuda_alike():
             if vllm_config.speculative_config is None:

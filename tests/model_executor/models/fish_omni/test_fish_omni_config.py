@@ -148,6 +148,27 @@ def test_rejects_dense_backbone_layer():
         _config(mlp_layer_types=["moe"] * 39 + ["dense"])
 
 
+def test_npu_fused_qk_rope_is_rejected_after_construction():
+    import vllm_omni.model_executor.models.fish_omni.fish_omni_model as fish_model
+
+    class _Eager:
+        use_fused_qk_norm_rope_gate = False
+
+    class _Fused:
+        use_fused_qk_norm_rope_gate = True
+
+    class _Root:
+        def __init__(self, children: list[object]) -> None:
+            self._children = children
+
+        def modules(self) -> list[object]:
+            return self._children
+
+    fish_model._require_npu_eager_qk_rope(_Root([_Eager()]))
+    with pytest.raises(RuntimeError, match="fused QK-norm RoPE"):
+        fish_model._require_npu_eager_qk_rope(_Root([_Eager(), _Fused()]))
+
+
 def test_tensor_parallel_is_allowed_on_npu_only(monkeypatch):
     from types import SimpleNamespace
 

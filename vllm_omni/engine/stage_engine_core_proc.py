@@ -44,42 +44,53 @@ from vllm_omni.engine.stage_init_utils import (
 logger = init_logger(__name__)
 
 
+def _accepts_prefill_end(method: Any) -> bool:
+    """Whether ``method`` can take vLLM's ``prefill_end`` keyword."""
+    if getattr(method, "_omni_accepts_prefill_end", False):
+        return True
+    import inspect
+
+    try:
+        parameters = inspect.signature(method).parameters
+    except (TypeError, ValueError):
+        return False
+    return "prefill_end" in parameters or any(
+        parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
+    )
+
+
+def _install_prefill_end_shim(manager_cls: Any) -> bool:
+    """Drop ``prefill_end`` only when ``manager_cls`` would reject it.
+
+    Returns whether a wrapper was installed. Current vLLM-Ascend accepts the
+    argument and forwards it; wrapping that method would change the block
+    count. The v0.30 signature raises on the keyword, so it still needs the shim.
+    """
+    current = manager_cls.get_num_blocks_to_allocate
+    if _accepts_prefill_end(current):
+        return False
+
+    def get_num_blocks_to_allocate(self: Any, *args: Any, prefill_end: int = 0, **kwargs: Any) -> int:
+        del prefill_end
+        return current(self, *args, **kwargs)
+
+    get_num_blocks_to_allocate._omni_accepts_prefill_end = True  # type: ignore[attr-defined]
+    manager_cls.get_num_blocks_to_allocate = get_num_blocks_to_allocate  # type: ignore[method-assign]
+    return True
+
+
 def _install_ascend_mamba_prefill_end_compat() -> None:
-    """Let Ascend's mamba block allocator accept vLLM's ``prefill_end``.
+    """Let an older Ascend mamba allocator accept vLLM's ``prefill_end``.
 
     vLLM passes ``prefill_end`` into every cache manager. Ascend's override
-    was written before that argument and rejects the call, so the first
-    Drama 3 schedule dies before any forward.
+    before that argument rejects the call, so the first Drama 3 schedule dies
+    before any forward. Builds that already accept the argument are left alone.
     """
     try:
         from vllm_ascend.patch.platform.patch_mamba_manager import AscendMambaManager
     except Exception:
         return
-    current = AscendMambaManager.get_num_blocks_to_allocate
-    if getattr(current, "_omni_accepts_prefill_end", False):
-        return
-    # Current vLLM-Ascend accepts ``prefill_end`` and uses it. Wrapping those
-    # builds would drop the argument and change the block count. Only the
-    # older signature, which raises on the keyword, needs this shim.
-    import inspect
-
-    try:
-        parameters = inspect.signature(current).parameters
-    except (TypeError, ValueError):
-        accepts_prefill_end = False
-    else:
-        accepts_prefill_end = "prefill_end" in parameters or any(
-            parameter.kind == inspect.Parameter.VAR_KEYWORD for parameter in parameters.values()
-        )
-    if accepts_prefill_end:
-        return
-
-    def get_num_blocks_to_allocate(self, *args: Any, prefill_end: int = 0, **kwargs: Any) -> int:
-        del prefill_end
-        return current(self, *args, **kwargs)
-
-    get_num_blocks_to_allocate._omni_accepts_prefill_end = True  # type: ignore[attr-defined]
-    AscendMambaManager.get_num_blocks_to_allocate = get_num_blocks_to_allocate  # type: ignore[method-assign]
+    _install_prefill_end_shim(AscendMambaManager)
 
 
 _SIGNAL_EXIT_BASE = 128

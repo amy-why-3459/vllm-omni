@@ -17,6 +17,7 @@ from vllm_omni.engine.stage_engine_core_proc import (
     StageEngineCoreProc,
     _bind_first_audio_sink,
     _extend_handshake_timeout,
+    _install_prefill_end_shim,
 )
 from vllm_omni.worker_v2.first_audio_sender import supports_in_process_first_audio
 
@@ -135,6 +136,33 @@ def test_first_audio_binding_preserves_talker_marker():
     assert outputs.get_nowait()[1].outputs[0].multimodal_output[FIRST_AUDIO_KEY]
     executor.vllm_config.parallel_config.tensor_parallel_size = 2
     assert not module._bind_first_audio_sink(executor, outputs, scheduler)
+
+
+def test_prefill_end_shim_wraps_only_the_old_signature():
+    class _Old:
+        def get_num_blocks_to_allocate(self, num_tokens: int) -> int:
+            return num_tokens
+
+    class _Named:
+        def get_num_blocks_to_allocate(self, num_tokens: int, prefill_end: int = 0) -> int:
+            return num_tokens + prefill_end
+
+    class _VarKeyword:
+        def get_num_blocks_to_allocate(self, num_tokens: int, **kwargs: Any) -> int:
+            return num_tokens + int(kwargs["prefill_end"])
+
+    assert _install_prefill_end_shim(_Old) is True
+    # The wrapper accepts the keyword the original method rejects.
+    assert getattr(_Old(), "get_num_blocks_to_allocate")(4, prefill_end=7) == 4
+    # A second install must not stack another wrapper around the one that already drops the argument.
+    assert _install_prefill_end_shim(_Old) is False
+    assert getattr(_Old(), "get_num_blocks_to_allocate")(4, prefill_end=7) == 4
+
+    assert _install_prefill_end_shim(_Named) is False
+    assert _Named().get_num_blocks_to_allocate(4, prefill_end=7) == 11
+
+    assert _install_prefill_end_shim(_VarKeyword) is False
+    assert _VarKeyword().get_num_blocks_to_allocate(4, prefill_end=7) == 11
 
 
 @pytest.mark.parametrize(("timeout_s", "expected_minutes"), [(900.0, 15), (901.0, 16), (60.0, 5)])
