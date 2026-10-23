@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
+import builtins
 from typing import Any
 
 import pytest
@@ -8,6 +9,28 @@ import pytest
 from vllm_omni.platforms.npu.mamba_compat import _install_prefill_end_shim
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
+
+
+@pytest.mark.parametrize("error_type", [ImportError, RuntimeError])
+def test_mamba_import_only_ignores_missing_dependencies(monkeypatch, error_type):
+    from vllm_omni.platforms.npu import mamba_compat
+
+    original_import = builtins.__import__
+    error = error_type("Ascend allocator import failed")
+
+    def import_module(name, *args, **kwargs):
+        if name == "vllm_ascend.patch.platform.patch_mamba_manager":
+            raise error
+        return original_import(name, *args, **kwargs)
+
+    with monkeypatch.context() as context:
+        context.setattr(builtins, "__import__", import_module)
+        if error_type is ImportError:
+            mamba_compat._install_ascend_mamba_prefill_end_compat()
+        else:
+            with pytest.raises(RuntimeError) as caught:
+                mamba_compat._install_ascend_mamba_prefill_end_compat()
+            assert caught.value is error
 
 
 def test_prefill_end_shim_wraps_only_the_old_signature():

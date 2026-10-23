@@ -46,6 +46,10 @@ def _install_ascend_mamba_prefill_end_compat() -> None:
     vLLM passes ``prefill_end`` into every cache manager. Ascend's override
     before that argument rejects the call, so the first Drama 3 schedule dies
     before any forward. Builds that already accept the argument are left alone.
+    Missing imports are optional for compatibility across Ascend versions.
+    Other initialization failures intentionally propagate on NPU, rather than
+    silently continuing with a potentially broken allocator. Other platforms
+    do not invoke this installer.
     """
     try:
         from vllm_ascend.patch.platform.patch_mamba_manager import AscendMambaManager
