@@ -163,7 +163,6 @@ def test_qwen3_omni_seed_tts_wer_bench(omni_server) -> None:
     argv = build_acc_benchmark_cli_argv(omni_server, skip_seed=False, skip_daily=True)
     argv.extend(
         [
-            "--seed-tts-wer-save-items",
             "--max-seed-tts-mean-wer",
             str(_MAX_SEED_TTS_MEAN_WER),
             "--min-seed-tts-mean-sim",
