@@ -149,7 +149,7 @@ def test_rejects_dense_backbone_layer():
 
 
 def test_npu_fused_qk_rope_is_rejected_after_construction():
-    import vllm_omni.model_executor.models.fish_omni.fish_omni_model as fish_model
+    import vllm_omni.platforms.npu.models.fish_omni as fish_model
 
     class _Eager:
         use_fused_qk_norm_rope_gate = False

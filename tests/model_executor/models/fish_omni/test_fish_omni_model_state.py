@@ -222,7 +222,9 @@ def test_max_top_k_is_a_power_of_two_from_the_ras_top_k_to_the_codebook(value, o
 
 def test_npu_device_selects_ascend_model_state(monkeypatch):
     sentinel = object()
-    monkeypatch.setattr(ms, "NPUFishOmniModelState", lambda *args, **kwargs: sentinel)
+    from vllm_omni.platforms.npu.models import fish_omni_model_state as npu_ms
+
+    monkeypatch.setattr(npu_ms, "NPUFishOmniModelState", lambda *args, **kwargs: sentinel)
     assert ms.create_fish_omni_model_state(None, None, None, SimpleNamespace(type="npu")) is sentinel
 
 

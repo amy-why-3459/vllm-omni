@@ -17,7 +17,6 @@ from vllm_omni.engine.stage_engine_core_proc import (
     StageEngineCoreProc,
     _bind_first_audio_sink,
     _extend_handshake_timeout,
-    _install_prefill_end_shim,
 )
 from vllm_omni.worker_v2.first_audio_sender import supports_in_process_first_audio
 
@@ -138,33 +137,6 @@ def test_first_audio_binding_preserves_talker_marker():
     assert not module._bind_first_audio_sink(executor, outputs, scheduler)
 
 
-def test_prefill_end_shim_wraps_only_the_old_signature():
-    class _Old:
-        def get_num_blocks_to_allocate(self, num_tokens: int) -> int:
-            return num_tokens
-
-    class _Named:
-        def get_num_blocks_to_allocate(self, num_tokens: int, prefill_end: int = 0) -> int:
-            return num_tokens + prefill_end
-
-    class _VarKeyword:
-        def get_num_blocks_to_allocate(self, num_tokens: int, **kwargs: Any) -> int:
-            return num_tokens + int(kwargs["prefill_end"])
-
-    assert _install_prefill_end_shim(_Old) is True
-    # The wrapper accepts the keyword the original method rejects.
-    assert getattr(_Old(), "get_num_blocks_to_allocate")(4, prefill_end=7) == 4
-    # A second install must not stack another wrapper around the one that already drops the argument.
-    assert _install_prefill_end_shim(_Old) is False
-    assert getattr(_Old(), "get_num_blocks_to_allocate")(4, prefill_end=7) == 4
-
-    assert _install_prefill_end_shim(_Named) is False
-    assert _Named().get_num_blocks_to_allocate(4, prefill_end=7) == 11
-
-    assert _install_prefill_end_shim(_VarKeyword) is False
-    assert _VarKeyword().get_num_blocks_to_allocate(4, prefill_end=7) == 11
-
-
 @pytest.mark.parametrize(("timeout_s", "expected_minutes"), [(900.0, 15), (901.0, 16), (60.0, 5)])
 def test_handshake_wait_is_extended_but_never_shortened(monkeypatch, timeout_s, expected_minutes) -> None:
     import vllm.v1.engine.core as engine_core_module
@@ -172,3 +144,22 @@ def test_handshake_wait_is_extended_but_never_shortened(monkeypatch, timeout_s, 
     monkeypatch.setattr(engine_core_module, "HANDSHAKE_TIMEOUT_MINS", 5)
     _extend_handshake_timeout(timeout_s)
     assert engine_core_module.HANDSHAKE_TIMEOUT_MINS == expected_minutes
+
+
+def test_platform_compat_runs_before_engine_construction(monkeypatch):
+    from vllm_omni.engine import stage_engine_core_proc as module
+
+    calls = []
+
+    class ConstructionStoppedError(Exception):
+        pass
+
+    def construct(self, *args, **kwargs):
+        calls.append("engine")
+        raise ConstructionStoppedError
+
+    monkeypatch.setattr(module.current_omni_platform, "prepare_stage_engine", lambda: calls.append("platform"))
+    monkeypatch.setattr(EngineCoreProc, "__init__", construct)
+    with pytest.raises(ConstructionStoppedError):
+        StageEngineCoreProc()
+    assert calls == ["platform", "engine"]

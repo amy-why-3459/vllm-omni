@@ -4,6 +4,7 @@
 
 import sys
 import types
+from collections.abc import Mapping
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -14,6 +15,7 @@ from vllm.model_executor.layers.quantization import fp8, get_quantization_config
 
 from vllm_omni.model_executor.models.fish_omni import quantization
 from vllm_omni.model_executor.models.fish_omni.quantization import QUANTIZATION_METHOD, ExpertFp8Config
+from vllm_omni.platforms.npu.quant import fish_omni as npu_quantization
 
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
@@ -24,8 +26,8 @@ CHECKPOINT_QUANT_CONFIG = {
 }
 
 
-def _install_fake_ascend(monkeypatch, **modules: object) -> None:
-    """Stub the vllm_ascend attributes ``_npu_quant_method`` imports."""
+def _install_fake_ascend(monkeypatch, **modules: Mapping[str, object]) -> None:
+    """Stub the vllm_ascend attributes ``get_fish_omni_quant_method`` imports."""
     packages = {name.rsplit(".", 1)[0] for name in modules}
     packages |= {parent for name in packages for parent in _ancestors(name)}
     for name in sorted(packages):
@@ -112,7 +114,7 @@ def test_routed_experts_use_fp8_moe(monkeypatch):
 
 def test_npu_routed_experts_use_ascend_fp8(monkeypatch):
     monkeypatch.setattr(quantization, "current_platform", SimpleNamespace(device_type="npu"))
-    monkeypatch.setattr(quantization, "_dequantize_npu_block_fp8_on_cpu", lambda method: None)
+    monkeypatch.setattr(npu_quantization, "_dequantize_npu_block_fp8_on_cpu", lambda method: None)
     sentinel = object()
     seen = {}
 
@@ -157,7 +159,7 @@ def test_cpu_dequant_override_is_scoped_to_selected_scheme(monkeypatch):
     and that the upstream expansion runs with host-resident parameters.
     """
     expanded = torch.zeros(1, 2, 4, dtype=torch.bfloat16)
-    seen = {}
+    seen: dict[str, tuple[object, ...]] = {}
 
     class Scheme:
         def _resolve_experts(self, layer, weight_name, scale_name):
@@ -194,4 +196,4 @@ def test_cpu_dequant_override_is_scoped_to_selected_scheme(monkeypatch):
     assert torch.equal(selected._resolve_experts(layer, "weight", "scale"), expanded)
     assert seen["args"] == (layer, "weight", "scale")
     assert seen["devices"] == ("cpu", "cpu")
-    quantization._dequantize_npu_block_fp8_on_cpu(None)
+    npu_quantization._dequantize_npu_block_fp8_on_cpu(None)

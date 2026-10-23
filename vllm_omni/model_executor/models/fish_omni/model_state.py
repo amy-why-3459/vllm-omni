@@ -424,38 +424,13 @@ class FishOmniModelState(OmniModelState, MambaHybridModelState):
         return hidden, _FrameRowsSnapshot(frames, valid, partitioned=self._partitioned)
 
 
-class NPUFishOmniModelState(FishOmniModelState):
-    """Drama 3 request state whose attention metadata is the Ascend V2 one.
-
-    Request slots, frame rows and sampling stay on ``FishOmniModelState``.
-    ``prepare_attn`` and the GDN align pre-copy come from the Ascend hybrid
-    state, which reads ``attn_state`` and ``seq_lens_np`` off the Ascend batch.
-    """
-
-    uses_ascend_attn_metadata = True
-
-    def __init__(self, vllm_config, model, encoder_cache, device) -> None:
-        super().__init__(vllm_config, model, encoder_cache, device)
-        # AscendMambaHybridModelState fields used by its preprocess_state.
-        self._layerwise_mamba_copy = None
-        self._layer_state_ranges = None
-
-    def prepare_attn(self, *args: Any, **kwargs: Any):
-        from vllm_ascend.worker.v2.model_states.mamba_hybrid import AscendMambaHybridModelState
-
-        return AscendMambaHybridModelState.prepare_attn(self, *args, **kwargs)
-
-    def preprocess_state(self, *args: Any, **kwargs: Any):
-        from vllm_ascend.worker.v2.model_states.mamba_hybrid import AscendMambaHybridModelState
-
-        return AscendMambaHybridModelState.preprocess_state(self, *args, **kwargs)
-
-
 def create_fish_omni_model_state(vllm_config, model, encoder_cache, device):
     """CUDA keeps the upstream hybrid state; NPU builds Ascend attention metadata."""
     if getattr(device, "type", None) == "npu":
+        from vllm_omni.platforms.npu.models.fish_omni_model_state import NPUFishOmniModelState
+
         return NPUFishOmniModelState(vllm_config, model, encoder_cache, device)
     return FishOmniModelState(vllm_config, model, encoder_cache, device)
 
 
-__all__ = ["FishOmniModelState", "NPUFishOmniModelState", "create_fish_omni_model_state"]
+__all__ = ["FishOmniModelState", "create_fish_omni_model_state"]
