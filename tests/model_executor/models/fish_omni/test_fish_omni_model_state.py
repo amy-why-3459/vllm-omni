@@ -97,6 +97,8 @@ def test_preempted_request_resumes_with_its_generated_frames(make_state):
     state.buffers.slot_history[1, :3] = codes
     state.buffers.slot_generated[1] = 3
     state.on_request_preempted("a", 1)
+    assert state._suspended["a"].history.device.type == "cpu"
+    assert state._suspended["a"].count.device.type == "cpu"
     # Another request takes the slot before "a" comes back.
     state.buffers.slot_history[1].zero_()
     state.buffers.slot_generated[1] = 0
@@ -116,6 +118,8 @@ def test_preempted_request_resumes_with_its_generated_frames(make_state):
     assert ras[-3:] == main
     # The resumed slot gets its code history back, for a later preemption.
     assert list(state._pending_history) == [2] and torch.equal(state._pending_history[2], codes)
+    state.on_requests_finished({"a"})
+    assert "a" not in state._suspended
 
 
 def test_slot_reused_before_a_step_keeps_only_the_newest_request(make_state):

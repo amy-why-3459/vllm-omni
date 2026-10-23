@@ -238,7 +238,11 @@ class FishOmniModelState(OmniModelState, MambaHybridModelState):
             event = torch.cuda.Event()
             event.record()
         else:
-            host_history, host_count = history.clone(), count.clone()
+            # Native NPU tensors are not CUDA tensors. Blocking host copies
+            # complete before the slot can be reused; copy=True also keeps CPU
+            # snapshots independent of the original slot storage.
+            host_history = history.to(device="cpu", non_blocking=False, copy=True)
+            host_count = count.to(device="cpu", non_blocking=False, copy=True)
         self._suspended[req_id] = _SuspendedRequest(host_history, host_count, event)
 
     def on_requests_finished(self, req_ids: set[str]) -> None:
