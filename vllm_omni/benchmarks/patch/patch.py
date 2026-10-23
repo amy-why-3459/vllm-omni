@@ -3855,6 +3855,33 @@ async def benchmark(
             "input_lens": [output.prompt_len for output in outputs],
             "errors": [output.error for output in outputs],
         }
+
+    # Keep per-request audio evidence, including failed or audio-less replies.
+    # Times use seconds (start_time uses perf_counter); RTF is dimensionless.
+    # Zero is the output dataclass's unmeasured sentinel, not an observation.
+    def measured_audio_value(output: RequestFuncOutput, field: str) -> int | float | None:
+        value = getattr(output, field, None)
+        if isinstance(value, int | float) and not isinstance(value, bool) and np.isfinite(value) and value > 0:
+            return value
+        return None
+
+    audio_fields = ("audio_ttfp", "audio_rtf", "audio_duration", "audio_frames")
+    if any(metric.startswith("audio") for metric in selected_percentile_metrics) or any(
+        measured_audio_value(output, field) is not None for output in outputs for field in audio_fields
+    ):
+        result["audio_request_metrics"] = [
+            {
+                "request_index": index,
+                "request_id": getattr(request, "request_id", None),
+                "success": output.success,
+                "error": output.error,
+                "start_time": measured_audio_value(output, "start_time"),
+                "latency": measured_audio_value(output, "latency"),
+                **{field: measured_audio_value(output, field) for field in audio_fields},
+            }
+            for index, (request, output) in enumerate(zip(input_requests, outputs))
+        ]
+
     # Preserve request order, including missing snapshots, so CI can verify
     # fixed stage workloads without parsing logs or storing audio payloads.
     request_stage_metrics = [
