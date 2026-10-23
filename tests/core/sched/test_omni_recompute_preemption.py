@@ -14,6 +14,7 @@ import torch
 from vllm.config import CacheConfig, SchedulerConfig, VllmConfig
 from vllm.distributed.kv_transfer.kv_connector.v1.base import KVConnectorBase_V1
 from vllm.sampling_params import SamplingParams
+from vllm.v1.core.single_type_kv_cache_manager import register_all_kvcache_specs
 from vllm.v1.engine import FinishReason
 from vllm.v1.kv_cache_interface import FullAttentionSpec, KVCacheConfig, KVCacheGroupSpec
 from vllm.v1.outputs import ModelRunnerOutput
@@ -49,6 +50,9 @@ def _scheduler(mode="fail", requires_kv_delivery=False, auxiliary=False, block_s
     config.cache_config = CacheConfig(block_size=block_size, enable_prefix_caching=False)
     # By default: one null block and one usable block, enough only for prefill.
     config.cache_config.num_gpu_blocks = num_blocks
+    # Match EngineCore initialization before constructing the scheduler. Custom
+    # specs registered during test collection can suppress lazy built-in registration.
+    register_all_kvcache_specs(config)
     kv_config = KVCacheConfig(
         num_blocks=num_blocks,
         kv_cache_tensors=[],
