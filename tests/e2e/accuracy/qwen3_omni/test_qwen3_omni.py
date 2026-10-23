@@ -148,7 +148,9 @@ def test_qwen3_omni_seed_tts_reads_questions_verbatim(omni_server, online_client
 # Earlier checked-in runs scored WER 0.217 and 0.223. SIM 0.75 is 0.074
 # under the L20X mean; UTMOS 3.10 is 0.25 under the L20X mean. H100 and
 # B200 still need their own SIM and UTMOS measurement before tightening.
-_MAX_SEED_TTS_MEAN_WER = 0.35
+# Verbatim-reading prompt, 1088 English utterances, L20X, 2026-10-23:
+# mean WER 0.028078. Require mean WER <= 3%.
+_MAX_SEED_TTS_MEAN_WER = 0.03
 _MIN_SEED_TTS_MEAN_SIM = 0.75
 _MIN_SEED_TTS_MEAN_UTMOS = 3.10
 
