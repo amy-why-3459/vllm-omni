@@ -1379,7 +1379,7 @@ def _build_engine_args(
     engine_args["requires_full_payload_input"] = ps.requires_full_payload_input
     if not ps.supports_running_prefix_cache_reset:
         engine_args["supports_running_prefix_cache_reset"] = False
-    if ps.recompute_preemption != "allow":
+    if ps.execution_type is StageExecutionType.LLM_AR and ps.recompute_preemption != "allow":
         engine_args["recompute_preemption"] = ps.recompute_preemption
     return engine_args
 

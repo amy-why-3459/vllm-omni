@@ -556,6 +556,15 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
             )
         self.finish_requests(request_ids, RequestStatus.FINISHED_ERROR)
 
+    def reset_prefix_cache(self, reset_running_requests: bool = False, reset_connector: bool = False) -> bool:
+        # Upstream uses drop_stale_output for both reset and KV-delivery
+        # capacity preemption. Only the explicit reset operation may resume.
+        self._resetting_prefix_cache = True
+        try:
+            return super().reset_prefix_cache(reset_running_requests, reset_connector)
+        finally:
+            self._resetting_prefix_cache = False
+
     def _preempt_request(
         self,
         request: Request,
@@ -575,16 +584,13 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
         one terminal error instead, so the caller learns the output is
         truncated rather than receiving audio that silently restarts.
         """
-        # ``drop_stale_output=True`` also marks reset_prefix_cache's own
-        # running-request reset, which intends to resume. Only a capacity
-        # preemption is the unrecoverable case.
-        if not getattr(self, "recompute_preemption_fails", False) or drop_stale_output:
+        if not getattr(self, "recompute_preemption_fails", False) or getattr(self, "_resetting_prefix_cache", False):
             return super()._preempt_request(request, timestamp, drop_stale_output=drop_stale_output)
         if request.is_finished():
             return
         reason = (
             "Request was preempted and this stage cannot replay its decode state; "
-            "the audio generated so far is truncated. Raise the stage's "
+            "the output generated so far is truncated. Raise the stage's "
             "gpu_memory_utilization or lower max_num_seqs to avoid preemption."
         )
         logger.warning(
