@@ -25,7 +25,7 @@ from vllm_omni.core.sched.omni_ar_scheduler import OmniARScheduler
 pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 
-def _scheduler(mode="fail", requires_kv_delivery=False):
+def _scheduler(mode="fail", requires_kv_delivery=False, auxiliary=False, block_size=16, num_blocks=2):
     config = VllmConfig()
     # Avoid downloading model weights/config; all scheduler/cache objects are real.
     config.model_config = SimpleNamespace(
@@ -45,20 +45,21 @@ def _scheduler(mode="fail", requires_kv_delivery=False):
         max_num_batched_tokens=64,
         is_encoder_decoder=False,
     )
-    config.cache_config = CacheConfig(block_size=16, enable_prefix_caching=False)
-    # One null block and one usable block: prefill fits; the first decode does not.
-    config.cache_config.num_gpu_blocks = 2
+    config.aux_output_config.enable_return_routed_experts = auxiliary
+    config.cache_config = CacheConfig(block_size=block_size, enable_prefix_caching=False)
+    # By default: one null block and one usable block, enough only for prefill.
+    config.cache_config.num_gpu_blocks = num_blocks
     kv_config = KVCacheConfig(
-        num_blocks=2,
+        num_blocks=num_blocks,
         kv_cache_tensors=[],
         kv_cache_groups=[
             KVCacheGroupSpec(
                 ["layer"],
-                FullAttentionSpec(block_size=16, num_kv_heads=1, head_size=8, dtype=torch.float16),
+                FullAttentionSpec(block_size=block_size, num_kv_heads=1, head_size=8, dtype=torch.float16),
             )
         ],
     )
-    scheduler = OmniARScheduler(config, kv_config, Mock(spec=StructuredOutputManager), 16)
+    scheduler = OmniARScheduler(config, kv_config, Mock(spec=StructuredOutputManager), block_size)
     if requires_kv_delivery:
         connector = Mock(spec=KVConnectorBase_V1)
         connector.requires_kv_delivery = True
@@ -97,8 +98,9 @@ def _prefill(scheduler, prompt_len=16):
 
 
 @pytest.mark.parametrize("requires_kv_delivery", [False, True])
-def test_capacity_preemption_emits_one_error_and_frees_state(requires_kv_delivery):
-    scheduler = _scheduler(requires_kv_delivery=requires_kv_delivery)
+@pytest.mark.parametrize("auxiliary", [False, True])
+def test_capacity_preemption_emits_one_error_and_frees_state(requires_kv_delivery, auxiliary):
+    scheduler = _scheduler(requires_kv_delivery=requires_kv_delivery, auxiliary=auxiliary)
     request = _prefill(scheduler)
     scheduled = scheduler.schedule()
     outputs = scheduler.update_from_output(scheduled, _output())
@@ -120,9 +122,16 @@ def test_capacity_preemption_emits_one_error_and_frees_state(requires_kv_deliver
     if requires_kv_delivery:
         scheduler.connector.request_finished.assert_called_once()
 
+    if auxiliary:
+        assert request.request_id not in scheduler.aux_output_connector._sent_hash_counts
+        assert scheduled.aux_output_connector_metadata.finished_requests == (request.request_id,)
+
     # A late repeat and subsequent empty engine step must not emit ERROR/ABORT twice.
     scheduler._preempt_request(request, 1.0)
-    assert scheduler.update_from_output(scheduler.schedule(), _output()) == {}
+    next_step = scheduler.schedule()
+    if auxiliary:
+        assert next_step.aux_output_connector_metadata.finished_requests == ()
+    assert scheduler.update_from_output(next_step, _output()) == {}
 
 
 @pytest.mark.parametrize("requires_kv_delivery", [False, True])

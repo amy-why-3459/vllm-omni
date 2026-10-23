@@ -312,7 +312,14 @@ request/KV state instead of requeueing it, including when a KV-delivery
 connector asks to discard stale output. Explicit `reset_prefix_cache` retains
 its existing resume behavior, subject to `supports_running_prefix_cache_reset`;
 its reset scope, rather than the shared `drop_stale_output` flag, identifies
-that exception.
+that exception. Fail-mode preemption also notifies the auxiliary-output
+connector before removing the request, so the worker receives its finished
+notification and subsequent metadata assembly cannot reference a freed request.
+
+Fish Omni retains the default `allow` policy: its MRv2 model state saves the
+generated codebooks before a slot is reused and restores full frame rows on
+resume. Missing codebooks in the token stream alone do not imply that a stage
+cannot replay; model-state replay support must also be considered.
 
 The adapter is the sole owner of started-request observations. Its single
 `translate_step` entry point captures an immutable `PrefixCacheStep`.

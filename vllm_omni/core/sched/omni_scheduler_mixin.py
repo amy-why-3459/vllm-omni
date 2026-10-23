@@ -612,6 +612,10 @@ class OmniSchedulerMixin(_SchedulerMixinBase):
             ),
         )
         request.stop_reason = reason
+        # Preserve upstream preemption's auxiliary-output lifecycle: finish_requests
+        # removes the request before this step builds connector metadata.
+        if self.aux_output_connector is not None:
+            self.aux_output_connector.request_finished(request)
         # The caller already popped this request from ``running``; freeing here
         # is what upstream's requeue path would otherwise do later.
         self.finish_requests([request.request_id], RequestStatus.FINISHED_ERROR)

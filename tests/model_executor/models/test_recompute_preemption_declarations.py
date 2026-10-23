@@ -8,13 +8,14 @@ different KV than the one that produced the audio already delivered
 (vllm-project/vllm-omni#6179):
 
 - a sampled RVQ codebook folded into `inputs_embeds` (Qwen3-Omni talker,
-  VoxCPM2, fish_omni, audio8_tts, fish_speech, qwen3_tts, moss_tts),
+  VoxCPM2, audio8_tts, fish_speech, qwen3_tts, moss_tts),
 - a per-frame temporal hidden plus codebook (personaplex),
 - 31 side-channel FSQ codes per frame (Gepard).
 
 Stages that embed the sampled token alone -- every thinker, Qwen2.5-Omni's
 talker, which keeps all codebook layers in the token stream -- keep upstream's
-recompute mode.
+recompute mode. Fish Omni also keeps recompute: its MRv2 model state saves and
+restores the full generated codebooks across preemption.
 
 This pins the declaration, not the failure mode: a stage dropped from `_FAIL`
 silently goes back to splicing or corrupting audio under memory pressure.
@@ -49,7 +50,6 @@ _FAIL = [
     (QWEN3_OMNI_PIPELINE, "talker"),
     (VOXCPM2_PIPELINE, "latent_generator"),
     (GEPARD_PIPELINE, "gepard"),
-    (FISH_OMNI_PIPELINE, "fish_omni"),
     (AUDIO8_TTS_PIPELINE, "audio8_tts_slow_ar"),
     (FISH_SPEECH_PIPELINE, "fish_speech_slow_ar"),
     (QWEN3_TTS_PIPELINE, "qwen3_tts"),
@@ -61,6 +61,8 @@ _FAIL = [
 ]
 
 _ALLOW = [
+    # Fish Omni MRv2 retains all generated codebooks across slot reuse.
+    (FISH_OMNI_PIPELINE, "fish_omni"),
     # Text AR: the token stream is the state.
     (QWEN3_OMNI_PIPELINE, "thinker"),
     (QWEN2_5_OMNI_PIPELINE, "thinker"),
