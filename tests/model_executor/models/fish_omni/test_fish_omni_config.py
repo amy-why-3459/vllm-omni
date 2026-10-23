@@ -167,6 +167,9 @@ def test_npu_fused_qk_rope_is_rejected_after_construction():
     fish_model._require_npu_eager_qk_rope(_Root([_Eager()]))
     with pytest.raises(RuntimeError, match="fused QK-norm RoPE"):
         fish_model._require_npu_eager_qk_rope(_Root([_Eager(), _Fused()]))
+    for children in ([], [object()]):
+        with pytest.raises(RuntimeError, match="no attention modules expose use_fused_qk_norm_rope_gate"):
+            fish_model._require_npu_eager_qk_rope(_Root(children))
 
 
 def test_tensor_parallel_is_allowed_on_npu_only(monkeypatch):

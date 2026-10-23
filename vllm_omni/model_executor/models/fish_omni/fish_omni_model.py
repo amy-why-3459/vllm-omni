@@ -199,7 +199,8 @@ def _require_npu_eager_qk_rope(model: Any) -> None:
     the flag again after ``super().__init__``, or a different class that owns
     the same flag, would otherwise reach the Triton kernel on Ascend. One
     check after construction keeps that guarantee without a forward hook
-    inside the compiled region.
+    inside the compiled region. No matching modules means the upstream flag
+    may have changed, so eager execution cannot be verified either.
     """
     enabled: list[str] = []
     armed = 0
@@ -213,6 +214,11 @@ def _require_npu_eager_qk_rope(model: Any) -> None:
         names = ", ".join(sorted(set(enabled)))
         raise RuntimeError(
             f"fish_omni: fused QK-norm RoPE stayed enabled on NPU ({names}). The Triton kernel is not valid on Ascend."
+        )
+    if armed == 0:
+        raise RuntimeError(
+            "fish_omni: no attention modules expose use_fused_qk_norm_rope_gate on NPU. "
+            "Cannot verify eager QK-norm RoPE; check the upstream attention implementation."
         )
     logger.info("fish_omni: eager QK-norm RoPE on NPU (%d attention modules)", armed)
 
