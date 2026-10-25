@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
+# Opt-in codec convolution autotuning; algorithm search adds warmup work.
+base_config: qwen3_omni_moe_mrv2.yaml
+cuda_mps: false
+connectors:
+  connector_of_shared_memory:
+    extra:
+      codec_cudnn_benchmark: true
