@@ -155,11 +155,6 @@ platforms:
     # in an overlay to disable it explicitly.
     cuda_mps: true
     stages:
-      - stage_id: 0
-        # FlashAttention on the Thinker's incremental duplex prefill keeps
-        # the first bar description and misses later shapes (square, triangle).
-        # Triton attention reads those frames.
-        attention_backend: TRITON_ATTN
       - stage_id: 1
         # Full-attention occupancy is bounded by max_num_seqs * max_model_len
         # (16 * 4096 = 65536 tokens). Keep the reported CUDA KV token capacity
