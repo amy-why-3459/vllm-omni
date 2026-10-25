@@ -237,13 +237,28 @@ class TestDeployTopology:
         # deploy is the only one that rounds batches up to a capture bucket, so
         # 32 entries cover its shape space; the multi-card variants leave the
         # buckets unset.
-        expected_graph_config = {
+        expected_graph_config: dict[str, object] = {
             "code2wav_enable_npu_graph": True,
             "code2wav_max_npu_graphs": 32,
         }
         if filename == "minicpmo_4_5.yaml":
             expected_graph_config["cfm_graph_batch_buckets"] = [1, 2, 4, 8]
         assert stages[2].yaml_engine_args["additional_config"] == expected_graph_config
+
+    @pytest.mark.parametrize(
+        "filename",
+        [
+            "minicpmo_4_5.yaml",
+            "minicpmo_4_5_2gpu.yaml",
+            "minicpmo_4_5_3gpu.yaml",
+            "minicpmo_4_5_8x4090.yaml",
+        ],
+    )
+    def test_cuda_thinker_uses_triton_attention(self, filename: str) -> None:
+        deploy = _apply_platform_overrides(load_deploy_config(_DEPLOY_DIR / filename), platform="cuda")
+        stages = merge_pipeline_deploy(OMNI_PIPELINES[deploy.pipeline], deploy)
+        # FlashAttention on incremental duplex prefills misses later shapes.
+        assert stages[0].yaml_engine_args["attention_backend"] == "TRITON_ATTN"
 
     def test_pipeline_exposes_full_and_async_payload_hooks(self) -> None:
         pipeline = OMNI_PIPELINES[_PIPELINE_KEY]

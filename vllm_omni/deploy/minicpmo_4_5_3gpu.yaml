@@ -97,6 +97,13 @@ stages:
       detokenize: true
 
 platforms:
+  cuda:
+    stages:
+      - stage_id: 0
+        # FlashAttention on the Thinker's incremental duplex prefill keeps
+        # the first bar description and misses later shapes (square, triangle).
+        # Triton attention reads those frames.
+        attention_backend: TRITON_ATTN
   npu:
     stages:
       - stage_id: 0
