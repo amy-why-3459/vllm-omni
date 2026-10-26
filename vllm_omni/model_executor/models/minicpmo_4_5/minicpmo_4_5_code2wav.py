@@ -969,6 +969,113 @@ class MiniCPMO45Code2Wav(nn.Module):
                 result.extend(parts)
         return result
 
+    @staticmethod
+    def _release_device_cache() -> None:
+        """Return cached-but-unused device blocks to the allocator."""
+        if torch.npu.is_available():
+            torch.npu.empty_cache()
+        else:
+            torch.cuda.empty_cache()
+
+    def _decode_rows_resilient(
+        self,
+        items: list[_WorkItem],
+        states: list[BatchedToken2WavState],
+        features: Any,
+        *,
+        ragged: bool,
+        released: bool = False,
+    ) -> tuple[list[Any], list[Any]]:
+        """``_decode_rows`` that survives a transient allocator OOM.
+
+        Colocated deployments leave Stage 2 a fraction of one card, and a burst
+        of concurrent requests can ask the CFM solver for more activation memory
+        than is free at that instant. The allocator raises
+        ``torch.OutOfMemoryError`` inside ``execute_model``, which is fatal to
+        the engine core process: the stage exits and every later request fails
+        with "Stage-2 has no live replica".
+
+        Two retries follow, both after releasing cached blocks:
+
+        * a multi-row batch is split in half (Whole-Euler replays per row, so the
+          split keeps every request's own cache and yields the same audio);
+        * a single row is retried once, because the allocator commonly holds
+          more reserved-but-unused memory than the row needs -- measured on a
+          910B1: 438 MiB requested, 307 MiB free, 14.89 GiB reserved.
+
+        A single row that fails again after releasing cache is a genuine
+        capacity error and propagates, so nothing is silently dropped.
+        """
+        try:
+            return self._decode_rows(items, states, features, ragged=ragged)
+        except torch.OutOfMemoryError:
+            self._release_device_cache()
+            if len(items) <= 1:
+                if released:
+                    raise
+                logger.warning(
+                    "MiniCPM-o Code2Wav ran out of device memory for one row; "
+                    "released cached blocks and retrying once"
+                )
+                return self._decode_rows_resilient(items, states, features, ragged=ragged, released=True)
+        half = len(items) // 2
+        logger.warning(
+            "MiniCPM-o Code2Wav ran out of device memory for %d rows; retrying as %d + %d",
+            len(items),
+            half,
+            len(items) - half,
+        )
+        audios: list[Any] = []
+        next_states: list[Any] = []
+        for part_items, part_states in (
+            (items[:half], states[:half]),
+            (items[half:], states[half:]),
+        ):
+            part_audios, part_states_out = self._decode_rows_resilient(
+                part_items, part_states, features, ragged=ragged, released=released
+            )
+            audios.extend(part_audios)
+            next_states.extend(part_states_out)
+        return audios, next_states
+
+    def _decode_bucket_oom_aware(self, bucket: list[_WorkItem], decode_once: Any, *, released: bool = False) -> Any:
+        """Run ``decode_once(bucket)``, halving the bucket when the allocator is out of memory.
+
+        The failure does not only come from the CFM replay: building a bucket's
+        per-request flow caches (``_prepare_decode_batch`` -> ``setup_batch`` ->
+        ``_split_flow_cache``) allocates as well, and that is where the first
+        OOM of a 16-way burst lands on a 910B1 (376 MiB requested, 427 MiB free,
+        13.86 GiB reserved). Both paths are transient reservations, so both are
+        retried after releasing cached blocks; a single request that still fails
+        is a genuine capacity error and propagates.
+        """
+        try:
+            return decode_once(bucket)
+        except torch.OutOfMemoryError:
+            self._release_device_cache()
+            if len(bucket) <= 1:
+                if released:
+                    raise
+                logger.warning(
+                    "MiniCPM-o Code2Wav ran out of device memory for one request; "
+                    "released cached blocks and retrying once"
+                )
+                return self._decode_bucket_oom_aware(bucket, decode_once, released=True)
+        half = len(bucket) // 2
+        logger.warning(
+            "MiniCPM-o Code2Wav ran out of device memory for %d requests; retrying as %d + %d",
+            len(bucket),
+            half,
+            len(bucket) - half,
+        )
+        audios: list[Any] = []
+        next_states: list[Any] = []
+        for part in (bucket[:half], bucket[half:]):
+            part_audios, part_states = self._decode_bucket_oom_aware(part, decode_once, released=released)
+            audios.extend(part_audios)
+            next_states.extend(part_states)
+        return audios, next_states
+
     def _decode_rows(
         self, items: list[_WorkItem], states: list[BatchedToken2WavState], features: Any, *, ragged: bool
     ) -> tuple[list[Any], list[Any]]:
@@ -1293,49 +1400,57 @@ class MiniCPMO45Code2Wav(nn.Module):
             decode_buckets = merged
         else:
             decode_buckets = buckets.values()
+        def decode_bucket_once(bucket: list[_WorkItem]) -> tuple[list[Any], list[Any]]:
+            """Prepare and decode one bucket; the unit the OOM retry halves."""
+            size = len(bucket)
+            self._watchdog.phase(
+                "decode/dispatch",
+                {
+                    "request_ids": [item.request_id for item in bucket],
+                    "batch_size": size,
+                    "codec_frames": [int(item.tokens.numel()) for item in bucket],
+                },
+            )
+            states, features = self._prepare_decode_batch(bucket)
+            fresh = [item for item in bucket if item.previous is None]
+            onset_mix = self._onset_merge and 0 < len(fresh) < size
+            onset_ready = onset_mix and self.backend.can_merge_state_shapes(
+                states, [int(item.tokens.numel()) for item in bucket]
+            )
+            row_groups: list[list[int]] | None = None
+            offset_mix = False
+            if isinstance(features, list):
+                # Each reference has its own cache lengths and conditioning.
+                # The ragged path handles them in one solve.
+                pass
+            elif onset_mix and not onset_ready:
+                # Cache layouts ragged Whole-Euler cannot take split back into signature buckets.
+                row_groups = self._signature_groups(bucket, states, row_offsets=row_offsets)
+            elif row_offsets and not onset_ready and size > 1:
+                groups = self._signature_groups(bucket, states, row_offsets=True)
+                if len(groups) > 1:
+                    row_groups = groups
+                else:
+                    # One decode, ragged when it holds rows of different cache lengths.
+                    offset_mix = len({state_shape_signature(state) for state in states}) > 1
+            if row_groups is None:
+                return self._decode_rows_resilient(bucket, states, features, ragged=onset_ready or offset_mix)
+            audios_part: list[Any] = [None] * size
+            next_states_part: list[Any] = [None] * size
+            for rows in row_groups:
+                group_states = [states[row] for row in rows]
+                mixed = row_offsets and len({state_shape_signature(state) for state in group_states}) > 1
+                decoded = self._decode_rows_resilient(
+                    [bucket[row] for row in rows], group_states, features, ragged=mixed
+                )
+                for row, audio, next_state in zip(rows, *decoded, strict=True):
+                    audios_part[row], next_states_part[row] = audio, next_state
+            return audios_part, next_states_part
+
         for bucket in self._iter_decode_batches(decode_buckets):
             batch_size = len(bucket)
             try:
-                self._watchdog.phase(
-                    "decode/dispatch",
-                    {
-                        "request_ids": [item.request_id for item in bucket],
-                        "batch_size": batch_size,
-                        "codec_frames": [int(item.tokens.numel()) for item in bucket],
-                    },
-                )
-                states, features = self._prepare_decode_batch(bucket)
-                fresh = [item for item in bucket if item.previous is None]
-                onset_mix = self._onset_merge and 0 < len(fresh) < batch_size
-                onset_ready = onset_mix and self.backend.can_merge_state_shapes(
-                    states, [int(item.tokens.numel()) for item in bucket]
-                )
-                row_groups: list[list[int]] | None = None
-                offset_mix = False
-                if isinstance(features, list):
-                    # Each reference has its own cache lengths and conditioning.
-                    # The ragged path handles them in one solve.
-                    pass
-                elif onset_mix and not onset_ready:
-                    # Cache layouts ragged Whole-Euler cannot take split back into signature buckets.
-                    row_groups = self._signature_groups(bucket, states, row_offsets=row_offsets)
-                elif row_offsets and not onset_ready and batch_size > 1:
-                    groups = self._signature_groups(bucket, states, row_offsets=True)
-                    if len(groups) > 1:
-                        row_groups = groups
-                    else:
-                        # One decode, ragged when it holds rows of different cache lengths.
-                        offset_mix = len({state_shape_signature(state) for state in states}) > 1
-                if row_groups is None:
-                    audios, next_states = self._decode_rows(bucket, states, features, ragged=onset_ready or offset_mix)
-                else:
-                    audios, next_states = [None] * batch_size, [None] * batch_size
-                    for rows in row_groups:
-                        group_states = [states[row] for row in rows]
-                        mixed = row_offsets and len({state_shape_signature(state) for state in group_states}) > 1
-                        decoded = self._decode_rows([bucket[row] for row in rows], group_states, features, ragged=mixed)
-                        for row, audio, next_state in zip(rows, *decoded, strict=True):
-                            audios[row], next_states[row] = audio, next_state
+                audios, next_states = self._decode_bucket_oom_aware(bucket, decode_bucket_once)
             except Exception as exc:
                 self._trim_runtime_prompts()
                 if isinstance(exc, RuntimeError) and str(exc).startswith("MiniCPMO45Code2WavBatchError "):

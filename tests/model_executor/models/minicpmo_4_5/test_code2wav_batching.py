@@ -2459,3 +2459,62 @@ def test_estimator_step_preserves_precomputed_time_embedding(monkeypatch):
         time_embedding=supplied,
     )
     assert seen[0] is supplied
+
+
+def test_decode_rows_resilient_halves_batch_after_oom(monkeypatch):
+    """An OOM in one decode bucket must retry at half the rows, not kill the engine."""
+    model = object.__new__(MiniCPMO45Code2Wav)
+    calls: list[list[int]] = []
+
+    def fake_decode_rows(items, states, features, *, ragged):
+        calls.append([int(item) for item in items])
+        if len(items) > 1:
+            raise torch.OutOfMemoryError("NPU out of memory")
+        return [f"audio-{items[0]}"], [f"state-{items[0]}"]
+
+    monkeypatch.setattr(MiniCPMO45Code2Wav, "_decode_rows", staticmethod(fake_decode_rows))
+    monkeypatch.setattr(torch.npu, "is_available", lambda: False, raising=False)
+    monkeypatch.setattr(torch.cuda, "empty_cache", lambda: None)
+
+    audios, next_states = model._decode_rows_resilient([0, 1, 2, 3], [None] * 4, object(), ragged=False)
+
+    assert audios == ["audio-0", "audio-1", "audio-2", "audio-3"]
+    assert next_states == ["state-0", "state-1", "state-2", "state-3"]
+    assert calls[0] == [0, 1, 2, 3]
+
+
+def test_decode_rows_resilient_retries_single_row_after_release(monkeypatch):
+    """One row is retried once after releasing cache; the allocator often holds reserved blocks."""
+    model = object.__new__(MiniCPMO45Code2Wav)
+    attempts: list[int] = []
+    releases: list[int] = []
+
+    def fake_decode_rows(items, states, features, *, ragged):
+        attempts.append(len(items))
+        if len(attempts) == 1:
+            raise torch.OutOfMemoryError("NPU out of memory")
+        return ["audio"], ["state"]
+
+    monkeypatch.setattr(MiniCPMO45Code2Wav, "_decode_rows", staticmethod(fake_decode_rows))
+    monkeypatch.setattr(MiniCPMO45Code2Wav, "_release_device_cache", staticmethod(lambda: releases.append(1)))
+
+    audios, next_states = model._decode_rows_resilient([7], [None], object(), ragged=False)
+
+    assert audios == ["audio"]
+    assert next_states == ["state"]
+    assert attempts == [1, 1]
+    assert len(releases) == 1
+
+
+def test_decode_rows_resilient_propagates_single_row_oom(monkeypatch):
+    """A single row that still does not fit after releasing cache is a capacity error."""
+    model = object.__new__(MiniCPMO45Code2Wav)
+
+    def fake_decode_rows(items, states, features, *, ragged):
+        raise torch.OutOfMemoryError("NPU out of memory")
+
+    monkeypatch.setattr(MiniCPMO45Code2Wav, "_decode_rows", staticmethod(fake_decode_rows))
+    monkeypatch.setattr(MiniCPMO45Code2Wav, "_release_device_cache", staticmethod(lambda: None))
+
+    with pytest.raises(torch.OutOfMemoryError):
+        model._decode_rows_resilient([7], [None], object(), ragged=False)
