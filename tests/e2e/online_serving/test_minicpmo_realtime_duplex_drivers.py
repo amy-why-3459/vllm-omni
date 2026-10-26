@@ -1652,6 +1652,73 @@ def test_realtime_duplex_demo_response_required_skips_audio_only_model_turn(monk
     assert outcome == "speak"
 
 
+@pytest.mark.parametrize("finished_before_commit", [False, True])
+def test_realtime_duplex_demo_checkpoints_early_response_before_commit(monkeypatch, finished_before_commit):
+    from vllm_omni.engine.duplex.config import DuplexSessionConfig
+    from vllm_omni.engine.duplex.session.engine_session import DuplexEngineSession
+    from vllm_omni.engine.duplex.session.playback_ledger import apply_playback_ack
+
+    demo = _load_demo_module()
+    state = demo.DemoState()
+    session = DuplexEngineSession(
+        session_id="early-response",
+        config=DuplexSessionConfig(model="test", playback_commit_policy="ack_only"),
+        num_stages=1,
+    )
+    response_id = session.begin_response()
+
+    def finish_response():
+        session.end_response()
+        state.add(
+            {
+                "type": "response.done",
+                "response": {
+                    "id": response_id,
+                    "status": "completed",
+                    "metadata": {"playback": {"sent_ms": 400}},
+                },
+            }
+        )
+
+    async def fake_send_pcm16(*args, **kwargs):
+        session.append_assistant_text("hello")
+        session.mark_audio_sent(400, text_chars=5, audio_complete=True)
+        state.add({"type": "response.created", "response": {"id": response_id}})
+        state.add({"type": "response.output_audio.delta", "response_id": response_id, "delta": "YQ=="})
+        state.add({"type": "response.output_audio_transcript.delta", "response_id": response_id, "delta": "hello"})
+        if finished_before_commit:
+            finish_response()
+
+    class FakeWebSocket:
+        async def send(self, payload):
+            event = demo.json.loads(payload)
+            if event["type"] == "input_audio_buffer.commit":
+                session.commit_audio_input(transcript="the complete input")
+                if not finished_before_commit:
+                    finish_response()
+            elif event["type"] == "playback.ack":
+                for reply in apply_playback_ack(session, event):
+                    assert reply.type != "error", reply
+                    state.add({"type": reply.type, "event": reply.details})
+
+    monkeypatch.setattr(demo, "_send_pcm16", fake_send_pcm16)
+    actual_id, outcome = asyncio.run(
+        demo._send_clean_turn(
+            FakeWebSocket(),
+            state,
+            b"\0\0",
+            transcript="fixture",
+            duration_ms=None,
+            chunk_ms=200,
+            timeout_s=0.1,
+            require_audio=True,
+            validation_mode="response-required",
+        )
+    )
+    assert (actual_id, outcome) == (response_id, "speak")
+    assert state.response_playback_history_committed(response_id)
+
+
 def test_realtime_duplex_demo_no_hint_realtime_turn_omits_transcript_hint(monkeypatch):
     demo = _load_demo_module()
     state = demo.DemoState()
@@ -1917,6 +1984,29 @@ def test_realtime_duplex_demo_audio_only_playback_ack(transcript, acked_ms, ack_
     else:
         with pytest.raises(TimeoutError):
             asyncio.run(acknowledge())
+
+
+def test_realtime_duplex_demo_playback_surfaces_server_error():
+    demo = _load_demo_module()
+    state = demo.DemoState()
+    state.add(
+        {
+            "type": "response.done",
+            "response": {
+                "id": "resp-late",
+                "metadata": {"playback": {"sent_ms": 400}},
+            },
+        }
+    )
+
+    class FakeWebSocket:
+        async def send(self, payload):
+            state.add({"type": "error", "code": "playback_ack_too_late", "message": "late ACK"})
+
+    with pytest.raises(RuntimeError, match="resp-late.*playback_ack_too_late"):
+        asyncio.run(
+            demo._ack_response_playback(FakeWebSocket(), state, "resp-late", timeout_s=0.1, label="second turn")
+        )
 
 
 def test_realtime_duplex_demo_model_policy_does_not_assume_one_response_per_physical_input():

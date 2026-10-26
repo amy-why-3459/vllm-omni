@@ -1108,6 +1108,24 @@ async def _send_clean_turn(
         stacked_frames_b64=stacked_frames_b64,
     )
     if commit_input:
+        # Native duplex can answer while the input is still streaming. Reserve
+        # those replies' history positions before commit advances the input
+        # sequence, otherwise the full playback ACK below is rejected as late.
+        # A zero ACK checkpoints ownership without claiming any audio was heard.
+        for early_response_id in state.response_ids[before_created:]:
+            if state.response_done(early_response_id) and state.response_audio_delta_count(early_response_id) == 0:
+                continue
+            await ws.send(
+                json.dumps(
+                    {
+                        "type": "playback.ack",
+                        "response_id": early_response_id,
+                        "item_id": f"item_{early_response_id}",
+                        "played_ms": 0,
+                        "committed_ms": 0,
+                    }
+                )
+            )
         state.input_commit_sent_at_s.append(time.monotonic())
         await ws.send(json.dumps({"type": "input_audio_buffer.commit", "final": True}))
     if validation_mode == "model-policy":
@@ -1187,9 +1205,16 @@ async def _ack_response_playback(
             }
         )
     )
+
+    def playback_settled() -> bool:
+        errors = _unexpected_error_events(state)
+        if errors:
+            raise RuntimeError(f"{label} playback failed for {response_id}: {json.dumps(errors, ensure_ascii=False)}")
+        return state.playback_ack_count > before_ack and state.response_playback_settled(response_id)
+
     await _wait_for(
         state,
-        lambda: state.playback_ack_count > before_ack and state.response_playback_settled(response_id),
+        playback_settled,
         timeout_s=timeout_s,
         label=f"{label} playback settled",
     )
