@@ -24,9 +24,17 @@ pytestmark = [pytest.mark.core_model, pytest.mark.cpu]
 
 @pytest.mark.parametrize(
     ("engine_attention", "vision_attention", "expected"),
-    [(None, None, SiglipAttention), (None, "sdpa", SiglipSdpaAttention), ("eager", "sdpa", SiglipAttention)],
+    [
+        (None, None, SiglipSdpaAttention),
+        (None, "sdpa", SiglipSdpaAttention),
+        (None, "eager", SiglipAttention),
+        ("eager", "sdpa", SiglipAttention),
+        ("sdpa", "eager", SiglipSdpaAttention),
+    ],
 )
-def test_thinker_vision_defaults_to_checkpoint_attention(monkeypatch, engine_attention, vision_attention, expected):
+def test_thinker_vision_defaults_to_sdpa_and_respects_overrides(
+    monkeypatch, engine_attention, vision_attention, expected
+):
     from vllm_omni.model_executor.models.minicpmo_4_5 import minicpmo_4_5_omni_llm as module
 
     vision = SiglipVisionConfig(
@@ -48,6 +56,7 @@ def test_thinker_vision_defaults_to_checkpoint_attention(monkeypatch, engine_att
     )
     model = MiniCPMO45OmniLLMForConditionalGeneration(vllm_config=SimpleNamespace(model_config=model_config))
     assert type(model.vpm.encoder.layers[0].self_attn) is expected
+    assert model.resampler.attn_implementation == (engine_attention or vision_attention or "sdpa")
 
 
 def test_fused_layers_match_eager_packed_layers() -> None:

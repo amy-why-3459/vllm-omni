@@ -661,9 +661,10 @@ through stride-5 pooling. Reference audio must not be cropped to a 100 ms
 boundary to simplify budgeting: the remaining samples can change the
 embeddings even when they do not add a pooled token.
 
-The MiniCPM-o SigLIP vision tower defaults to eager attention, matching the
-checkpoint implementation. SDPA can produce different BF16 embeddings; an
+The MiniCPM-o SigLIP vision tower defaults to SDPA on all platforms. An
 explicit engine or vision attention setting still overrides the default.
+Eager attention remains available for checkpoint arithmetic comparisons;
+SDPA and eager can produce different BF16 embeddings.
 The default MiniCPM-o deployment selects `TRITON_ATTN` for CUDA stage 0.
 Inherited turn-mode profiles use the same selection; Talker and NPU attention
 settings are unchanged.

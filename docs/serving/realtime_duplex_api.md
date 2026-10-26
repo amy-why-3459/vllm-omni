@@ -321,7 +321,7 @@ for the command and configuration requirements.
 
 The default `minicpmo_4_5.yaml` selects Triton attention for the CUDA Thinker
 (stage 0). The Talker's backend selection and graph settings are unchanged.
-The vision tower defaults to eager attention to match the checkpoint; explicit
+The vision tower defaults to SDPA on all platforms; explicit engine or
 vision overrides still win. The turn-mode profile inherits this CUDA default
 from the base deployment too. NPU backend selection is unchanged.
 
