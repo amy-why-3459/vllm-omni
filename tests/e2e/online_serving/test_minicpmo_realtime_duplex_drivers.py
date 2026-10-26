@@ -1822,7 +1822,7 @@ def test_realtime_duplex_demo_playback_gate_covers_unassigned_completed_response
         }
     )
 
-    assert not demo._all_response_playback_history_committed(
+    assert not demo._all_response_playback_settled(
         state,
         state.completed_response_ids(),
     )
@@ -1873,7 +1873,50 @@ def test_realtime_duplex_demo_acks_unassigned_completed_response():
     asyncio.run(demo._ack_all_completed_response_playback(ws, state, timeout_s=0.1))
 
     assert [message["response_id"] for message in ws.messages] == ["resp-unassigned"]
-    assert demo._all_response_playback_history_committed(state, state.completed_response_ids())
+    assert demo._all_response_playback_settled(state, state.completed_response_ids())
+
+
+@pytest.mark.parametrize(
+    "transcript,acked_ms,ack_item,accepted",
+    [
+        ("", 1200, "item_resp-audio", True),
+        ("", 600, "item_resp-audio", False),
+        ("", 1200, "item_other", False),
+        ("hello", 1200, "item_resp-audio", False),
+    ],
+)
+def test_realtime_duplex_demo_audio_only_playback_ack(transcript, acked_ms, ack_item, accepted):
+    demo = _load_demo_module()
+    state = demo.DemoState()
+    state.add({"type": "response.created", "response": {"id": "resp-audio"}})
+    _add_response_transcript(state, "resp-audio", transcript=transcript)
+    state.events[-1]["response"]["metadata"] = {"playback": {"sent_ms": 1200}}
+
+    class FakeWebSocket:
+        async def send(self, payload):
+            state.add(
+                {
+                    "type": "playback.acknowledged",
+                    "event": {
+                        "item_id": ack_item,
+                        "history_committed": False,
+                        "playback": {"committed_ms": acked_ms},
+                    },
+                }
+            )
+
+    async def acknowledge():
+        await demo._ack_response_playback(
+            FakeWebSocket(), state, "resp-audio", timeout_s=0.05, label="audio-only response"
+        )
+
+    if accepted:
+        asyncio.run(acknowledge())
+        assert demo._all_response_playback_settled(state, ["resp-audio"])
+        assert not state.response_playback_history_committed("resp-audio")
+    else:
+        with pytest.raises(TimeoutError):
+            asyncio.run(acknowledge())
 
 
 def test_realtime_duplex_demo_model_policy_does_not_assume_one_response_per_physical_input():
@@ -1888,6 +1931,18 @@ def test_realtime_duplex_demo_model_policy_does_not_assume_one_response_per_phys
         ["resp-1", "resp-2", "resp-3", "resp-4"],
         expected_turns=3,
         validation_mode="response-required",
+    )
+    assert demo._response_cardinality_ok(
+        ["resp-1", "resp-2", "resp-3", "resp-4"],
+        expected_turns=3,
+        validation_mode="response-required",
+        allow_extra_responses=True,
+    )
+    assert not demo._response_cardinality_ok(
+        ["resp-1", "resp-2"],
+        expected_turns=3,
+        validation_mode="response-required",
+        allow_extra_responses=True,
     )
 
 
