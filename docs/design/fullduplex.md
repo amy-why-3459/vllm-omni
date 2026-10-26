@@ -665,9 +665,11 @@ The MiniCPM-o SigLIP vision tower defaults to SDPA on all platforms. An
 explicit engine or vision attention setting still overrides the default.
 Eager attention remains available for checkpoint arithmetic comparisons;
 SDPA and eager can produce different BF16 embeddings.
-The default MiniCPM-o deployment selects `TRITON_ATTN` for CUDA stage 0.
-Inherited turn-mode profiles use the same selection; Talker and NPU attention
-settings are unchanged.
+MiniCPM-o deployments select `TRITON_ATTN` for CUDA stage 0, including the
+standalone 2-GPU, 3-GPU and 8x4090 layouts and inherited replica and turn-mode
+profiles. Talker and NPU attention settings are unchanged. This aligns the
+Thinker backend selection; it does not establish accuracy or performance parity
+across GPU types and layouts.
 
 Tool result conversion is preparation until the session's final deadline/epoch
 check and admission. `runtime_config_for_function_output` receives an isolated

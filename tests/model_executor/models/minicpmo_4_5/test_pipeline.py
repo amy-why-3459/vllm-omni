@@ -152,7 +152,7 @@ class TestPipelineTopology:
 
 
 class TestDeployTopology:
-    @pytest.mark.parametrize("filename", ["minicpmo_4_5.yaml", "minicpmo_4_5_turn.yaml"])
+    @pytest.mark.parametrize("filename", sorted(path.name for path in _DEPLOY_DIR.glob("minicpmo_4_5*.yaml")))
     @pytest.mark.parametrize("platform", ["cuda", "npu"])
     def test_default_thinker_backend_is_scoped_to_cuda(self, filename: str, platform: str) -> None:
         deploy = _apply_platform_overrides(load_deploy_config(_DEPLOY_DIR / filename), platform=platform)
