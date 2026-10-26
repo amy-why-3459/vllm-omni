@@ -654,6 +654,17 @@ Frame-based plugins use `engine/duplex/intermediate.py::build_duplex_append_prom
 for the shared request identity, sequencing and config snapshots. Token budgets,
 PCM framing and model-specific worker fields remain in the plugins.
 
+MiniCPM-o 4.5 preserves the complete reference waveform after resampling to
+16 kHz. Its first-append context budget follows the whole-clip encoder:
+ceil to 160-sample mel frames, ceil through the stride-2 CNN, then floor
+through stride-5 pooling. Reference audio must not be cropped to a 100 ms
+boundary to simplify budgeting: the remaining samples can change the
+embeddings even when they do not add a pooled token.
+
+The MiniCPM-o SigLIP vision tower defaults to eager attention, matching the
+checkpoint implementation. SDPA can produce different BF16 embeddings; an
+explicit engine or vision attention setting still overrides the default.
+
 Tool result conversion is preparation until the session's final deadline/epoch
 check and admission. `runtime_config_for_function_output` receives an isolated
 item copy with `name` and `arguments` from the immutable session call origin,

@@ -4257,12 +4257,14 @@ class MiniCPMO45OmniLLMForConditionalGeneration(nn.Module, SupportsMultiModal, S
         # Initialize vision encoder (SigLIP)
         if multimodal_config.get_limit_per_prompt("image"):
             # Set attention implementation
-            # (an engine override, else the vision config, else SDPA: eager math without the (B, H, L, L) scores)
+            # Keep the checkpoint's eager SigLIP arithmetic by default.
+            # SDPA is mathematically equivalent, but BF16 rounding changes the
+            # visual embeddings. Explicit engine/vision overrides still win.
             if getattr(getattr(vllm_config, "model_config", None), "_attn_implementation", None) is not None:
                 config.vision_config._attn_implementation = vllm_config.model_config._attn_implementation
             else:
                 vision_implementation = getattr(config.vision_config, "_attn_implementation", None)
-                config.vision_config._attn_implementation = vision_implementation or "sdpa"
+                config.vision_config._attn_implementation = vision_implementation or "eager"
             if config.vision_config._attn_implementation == "flash_attention_2" and not is_flash_attn_2_available():
                 logger.warning("flash_attention_2 requested for the MiniCPM-o vision tower but unavailable; using sdpa")
                 config.vision_config._attn_implementation = "sdpa"

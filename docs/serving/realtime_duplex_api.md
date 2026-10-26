@@ -319,7 +319,12 @@ for the command and configuration requirements.
 
 #### Compare MiniCPM-o attention backends
 
-The MiniCPM-o profiles leave CUDA Thinker attention selection to vLLM. To
+The base MiniCPM-o profiles leave CUDA Thinker attention selection to vLLM.
+Use `--deploy-config vllm_omni/deploy/minicpmo_4_5_duplex_triton.yaml`
+to select Triton attention for the CUDA Thinker only. The vision tower defaults
+to eager attention to match the checkpoint; explicit vision overrides still win.
+This profile supports controlled accuracy comparisons and does not promise
+identical generated tokens across backends. To
 compare a specific backend, use a deployment overlay that changes only stage 0.
 For example, save the following as `minicpmo_thinker_triton.yaml`, replacing the
 base path with your checkout:

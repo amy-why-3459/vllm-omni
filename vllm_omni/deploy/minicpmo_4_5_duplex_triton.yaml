@@ -1,0 +1,8 @@
+# CUDA Thinker attention profile for Transformers accuracy comparisons.
+# Keep Talker attention and graph settings inherited from the base profile.
+base_config: minicpmo_4_5.yaml
+platforms:
+  cuda:
+    stages:
+      - stage_id: 0
+        attention_backend: TRITON_ATTN
