@@ -664,6 +664,9 @@ embeddings even when they do not add a pooled token.
 The MiniCPM-o SigLIP vision tower defaults to eager attention, matching the
 checkpoint implementation. SDPA can produce different BF16 embeddings; an
 explicit engine or vision attention setting still overrides the default.
+The default MiniCPM-o deployment selects `TRITON_ATTN` for CUDA stage 0.
+Inherited turn-mode profiles use the same selection; Talker and NPU attention
+settings are unchanged.
 
 Tool result conversion is preparation until the session's final deadline/epoch
 check and admission. `runtime_config_for_function_output` receives an isolated
