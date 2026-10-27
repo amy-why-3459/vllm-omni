@@ -46,7 +46,11 @@ def _fake_npu(monkeypatch: pytest.MonkeyPatch, calls: list[str], *, current_devi
 
 
 def test_release_precapture_cache_uses_npu_empty_cache(monkeypatch: pytest.MonkeyPatch) -> None:
-    """On NPU the release must call torch.npu.empty_cache, not the CUDA path."""
+    """On NPU the release calls torch.npu.empty_cache, including when CUDA was never initialized.
+
+    The CUDA-unavailable guard used to skip the whole body. It lives in this
+    test so the NPU API choice and that guard are not two copies of the same call sequence.
+    """
     calls: list[str] = []
     _fake_npu(monkeypatch, calls)
 
@@ -55,23 +59,12 @@ def test_release_precapture_cache_uses_npu_empty_cache(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(code2wav_module.torch.accelerator, "empty_cache", _forbidden)
     monkeypatch.setattr(code2wav_module.torch.accelerator, "synchronize", _forbidden)
-
-    _stage()._release_precapture_cache()
-
-    assert calls == ["synchronize", "empty_cache"]
-
-
-def test_release_precapture_cache_is_reachable_on_npu(monkeypatch: pytest.MonkeyPatch) -> None:
-    """The NPU branch must not be gated on torch.cuda, which is always unavailable there."""
-    calls: list[str] = []
-    _fake_npu(monkeypatch, calls)
-    # A host that never initialized CUDA: the old guard skipped the whole body.
     monkeypatch.setattr(code2wav_module.torch.cuda, "is_available", lambda: False)
     monkeypatch.setattr(code2wav_module.torch.cuda, "is_initialized", lambda: False)
 
     _stage()._release_precapture_cache()
 
-    assert "empty_cache" in calls
+    assert calls == ["synchronize", "empty_cache"]
 
 
 def test_release_precapture_cache_survives_a_torch_without_npu_devices(monkeypatch: pytest.MonkeyPatch) -> None:
