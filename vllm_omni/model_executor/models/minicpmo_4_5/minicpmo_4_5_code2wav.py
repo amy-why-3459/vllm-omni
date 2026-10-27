@@ -1757,7 +1757,22 @@ class MiniCPMO45Code2Wav(nn.Module):
         """Return startup's unused cached allocator blocks to the driver (``cfm_precapture_empty_cache``).
 
         Live tensors, the slot pool and graph pools stay, so no later solve changes.
+
+        Ascend needs ``torch.npu.empty_cache``: ``torch.accelerator.empty_cache``
+        asserts "Allocator for npu is not a DeviceAllocator" on torch_npu, so
+        reusing the CUDA path here would crash the stage instead of releasing
+        memory. The CUDA branch keeps its own gate because ``torch.cuda`` is
+        unavailable on hosts that never initialized it.
         """
+        from vllm_omni.platforms import current_omni_platform
+
+        if current_omni_platform.is_npu():
+            torch.npu.synchronize()
+            before = _memory_snapshot(torch.device("npu", torch.npu.current_device()))
+            torch.npu.empty_cache()
+            delta = _format_memory_delta(before, _memory_snapshot(torch.device("npu", torch.npu.current_device())))
+            logger.info("MiniCPM-o Code2Wav: emptied the allocator cache after precapture%s", delta)
+            return
         if torch.cuda.is_available() and torch.cuda.is_initialized():
             device = torch.device("cuda", torch.accelerator.current_device_index())
             torch.accelerator.synchronize(device)
