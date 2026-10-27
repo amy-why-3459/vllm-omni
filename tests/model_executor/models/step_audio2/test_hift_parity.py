@@ -52,3 +52,31 @@ def test_vendored_mel_spectrogram_matches_flashcosyvoice() -> None:
         actual_spec = vendored(audio, **kwargs)
 
     torch.testing.assert_close(actual_spec, expected_spec)
+
+
+def test_weight_norm_folding_is_exact_and_idempotent() -> None:
+    """``StepAudio2Token2WavCore`` folds HiFT weight norms at load time.
+
+    Folding must not change the generator output: it only rewrites
+    ``weight = weight_g * weight_v / ||weight_v||`` into a plain weight. It must
+    also be a no-op on a second call, so a reloaded core cannot silently
+    re-fold an already folded checkpoint.
+    """
+    reference = _build_hift().eval()
+    folded = _build_hift().eval()
+    folded.load_state_dict(reference.state_dict(), strict=True)
+
+    # The deterministic generator subpath (no SineGen phase noise).
+    speech_feat = torch.randn(1, 80, 6)
+    with torch.inference_mode():
+        f0 = reference.f0_predictor(speech_feat)
+        source = reference.m_source(reference.f0_upsamp(f0[:, None]).transpose(1, 2))[0].transpose(1, 2)
+        expected = reference._decode_pre_istft(speech_feat, source)
+
+        assert folded.remove_weight_norm() > 0
+        actual = folded._decode_pre_istft(speech_feat, source)
+    for got, want in zip(actual, expected, strict=True):
+        torch.testing.assert_close(got, want, atol=1e-5, rtol=1e-5)
+
+    # Already folded: nothing left to remove.
+    assert folded.remove_weight_norm() == 0
