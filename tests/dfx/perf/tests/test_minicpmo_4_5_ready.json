@@ -30,11 +30,13 @@
         "endpoint": "/v1/chat/completions",
         "num_prompts": [
           10,
-          40
+          80,
+          160
         ],
         "max_concurrency": [
           1,
-          4
+          8,
+          16
         ],
         "no_oversample": true,
         "disable_shuffle": true,
@@ -50,31 +52,7 @@
             "use_tts_template": true
           }
         },
-        "percentile-metrics": "ttft,e2el,audio_ttfp,audio_rtf,audio_duration",
-        "baseline": {
-          "H100": {
-            "request_throughput": [
-              0.9731,
-              1.1986
-            ],
-            "mean_ttft_ms": [
-              152.5665,
-              270.2559
-            ],
-            "mean_e2el_ms": [
-              1027.2953,
-              3306.3735
-            ],
-            "mean_audio_ttfp_ms": [
-              458.1553,
-              2030.2335
-            ],
-            "mean_audio_rtf": [
-              0.2357,
-              0.791
-            ]
-          }
-        }
+        "percentile-metrics": "ttft,e2el,audio_ttfp,audio_rtf,audio_duration"
       }
     ]
   }

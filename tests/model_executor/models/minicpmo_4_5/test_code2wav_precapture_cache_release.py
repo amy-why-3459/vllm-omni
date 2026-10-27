@@ -72,3 +72,24 @@ def test_release_precapture_cache_is_reachable_on_npu(monkeypatch: pytest.Monkey
     _stage()._release_precapture_cache()
 
     assert "empty_cache" in calls
+
+
+def test_release_precapture_cache_survives_a_torch_without_npu_devices(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A CPU-only torch build has no "npu" device type; the release must still run.
+
+    CI runs this suite on a host whose torch never registered the npu backend,
+    where ``torch.device("npu", 0)`` raises and used to abort the release before
+    ``empty_cache``. The memory delta is log-only, so it must not be able to
+    suppress the release.
+    """
+    calls: list[str] = []
+    _fake_npu(monkeypatch, calls)
+
+    def _no_npu_device_type(*args, **kwargs):
+        raise RuntimeError("Expected one of cpu, cuda, ... device type at start of device string: npu")
+
+    monkeypatch.setattr(code2wav_module.torch, "device", _no_npu_device_type, raising=False)
+
+    _stage()._release_precapture_cache()
+
+    assert calls == ["synchronize", "empty_cache"]

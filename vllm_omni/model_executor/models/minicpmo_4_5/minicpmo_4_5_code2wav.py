@@ -1767,10 +1767,21 @@ class MiniCPMO45Code2Wav(nn.Module):
         from vllm_omni.platforms import current_omni_platform
 
         if current_omni_platform.is_npu():
+            # The log-only memory delta is a nicety, so it must not decide
+            # whether the cache is released: a CPU-only torch build (CI runs
+            # the CPU test suite) has no "npu" device type registered, and
+            # ``torch.device("npu", ...)`` raises there. ``_memory_snapshot``
+            # already returns None for anything it cannot read, so hand it the
+            # device only when one can be constructed.
+            try:
+                npu_device = torch.device("npu", torch.npu.current_device())
+            except (RuntimeError, TypeError):
+                npu_device = None
             torch.npu.synchronize()
-            before = _memory_snapshot(torch.device("npu", torch.npu.current_device()))
+            before = _memory_snapshot(npu_device) if npu_device is not None else None
             torch.npu.empty_cache()
-            delta = _format_memory_delta(before, _memory_snapshot(torch.device("npu", torch.npu.current_device())))
+            after = _memory_snapshot(npu_device) if npu_device is not None else None
+            delta = _format_memory_delta(before, after)
             logger.info("MiniCPM-o Code2Wav: emptied the allocator cache after precapture%s", delta)
             return
         if torch.cuda.is_available() and torch.cuda.is_initialized():
