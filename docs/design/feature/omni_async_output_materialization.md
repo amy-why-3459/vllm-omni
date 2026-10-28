@@ -193,6 +193,16 @@ be reused by the next forward pass. The dedicated copy stream and pinned host
 buffers make the D2H transfer asynchronous; the snapshot retains its cloned
 CUDA sources until the transfer event completes.
 
+Small lists of multiple compatible CUDA tensors are packed for one snapshot
+copy. A singleton list or tuple uses the ordinary tensor clone/copy path,
+preserving the container without an unnecessary pack and unpack.
+
+MiniCPM-o 4.5's Talker opts out of hidden-state payloads: Code2Wav consumes
+codec codes and metadata only. Its hidden states remain available for logits
+and sampling but are not cloned, copied to the host, or transported in the
+output payload. The Thinker retains its hidden-state handoff for TTS
+conditioning.
+
 ### Live Runner State and Ownership
 
 The complete builder input is not a detached snapshot. Connector output state

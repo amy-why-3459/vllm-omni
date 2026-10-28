@@ -98,7 +98,9 @@ def _clone_cuda_tensor_payload(value: Any, sources: list[torch.Tensor]) -> Any:
         return {k: _clone_cuda_tensor_payload(v, sources) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
         if (
-            value
+            # A single tensor needs only a clone/copy. Packing it adds cat,
+            # flattening, and CPU view construction without batching any work.
+            len(value) > 1
             and all(
                 isinstance(v, torch.Tensor)
                 and v.is_cuda
