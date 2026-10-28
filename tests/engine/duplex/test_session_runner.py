@@ -3393,9 +3393,13 @@ async def test_response_cancel_releases_audio_retained_for_the_cancelled_answer(
         await h.run(commands.Commit(create_response=True))
         request_id = h.stage0_request_id()
         await h.deliver_and_settle(tts_output(request_id, samples=24000, text="hello", finished=False))
-        # A mid-answer commit is retained for the response that is running.
-        await h.run(commands.Commit(create_response=True))
+        # Speech arriving mid-answer, committed without asking for a response:
+        # the retain belongs to the answer being generated, so
+        # ``deferred_response_create`` stays False and no new turn owns it.
+        await h.run(append_audio(samples=8000, value=0.07))
+        await h.run(commands.Commit(create_response=False))
         model_state = h.runner.model_state
+        assert model_state.committed_audio_payload is not None
         assert model_state.deferred_response_create is False
 
         await h.run(commands.CancelResponse())
