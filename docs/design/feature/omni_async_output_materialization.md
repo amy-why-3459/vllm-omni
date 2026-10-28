@@ -106,7 +106,7 @@ materialization on top of CUDA Graph and async chunk produced the following
 results at concurrency 64:
 
 | Configuration | Request throughput | Mean audio TTFP | Mean audio RTF |
-|---|---:|---:|---:|
+| --- | ---: | ---: | ---: |
 | CUDA Graph + async chunk | 9.3 req/s | 655 ms | 0.63 |
 | + async output materialization | 11.3 req/s | 631 ms | 0.47 |
 | Change | **+22%** | **-4%** | **-25%** |
@@ -144,11 +144,11 @@ The output lifecycle is:
    can be overwritten.
 4. The cloned payload is copied to pinned CPU memory on a dedicated CUDA
    stream. A CUDA event records when the copy is ready.
-5. `OmniAsyncGPUModelRunnerOutput` starts a background thread that waits for
-   the payload event and builds `OmniModelRunnerOutput`.
+5. `OmniAsyncGPUModelRunnerOutput` submits to a runner-owned single-worker executor
+   that waits for the payload event and builds `OmniModelRunnerOutput`.
 6. The AR runner immediately registers the sampled-token CPU copy with the
    input batch and returns, allowing async scheduling to advance.
-7. When the engine calls `get_output()`, it joins the background builder,
+7. When the engine calls `get_output()`, it waits for the builder future,
    propagates any builder exception, and finalizes sampled tokens and logprobs
    through the upstream output implementation.
 
@@ -167,6 +167,13 @@ next decode step                                +-- partition streaming payloads
                                                 +-- drain connector signals
                                                 +-- build OmniModelRunnerOutput
 ```
+
+The executor reuses its thread across decode steps and processes builders in
+submission order. Builder failures propagate through each output future without
+stopping subsequent tasks. Runner shutdown drains pending builders before
+releasing connector state, CUDA graphs, or tensor buffers. The existing engine
+output queue bounds in-flight work; this change does not introduce a new
+admission path.
 
 ### Safe State Snapshots
 
@@ -194,7 +201,7 @@ connector signals after the streaming payload is built. Correctness therefore
 depends on that builder being the only consumer that drains connector signals
 for its output cycle. Receive-side connector state written by the background
 receiver is coordinated by the connector mixin's `_lock`.
-`OmniAsyncGPUModelRunnerOutput.get_output()` joins the builder and is the
+`OmniAsyncGPUModelRunnerOutput.get_output()` waits for the builder future and is the
 completion and exception boundary before the materialized output is consumed.
 
 The shared output builder also contains a full-payload accumulation branch
@@ -223,7 +230,7 @@ outputs are not deferred because they affect scheduler-visible request state.
 ### Qwen3-Omni Stage Behavior
 
 | Stage | Async output behavior | Reason |
-|---|---|---|
+| --- | --- | --- |
 | Thinker | Snapshots hidden states and multimodal outputs; builds the downstream payload in the background | The Talker needs the payload, but the next Thinker decode step only needs sampled-token feedback |
 | Talker | Runs lightweight postprocess eagerly; snapshots codec outputs; omits hidden states from the downstream payload | `hidden_states.last` is needed by the next Talker step, while Code2Wav only needs codec codes |
 | Code2Wav | Uses the normal generation-stage output path | Code2Wav is not executed by `GPUARModelRunner` |
@@ -337,7 +344,7 @@ because they use the same Talker implementation.
 runtime conditions hold:
 
 | Requirement | Reason |
-|---|---|
+| --- | --- |
 | AR async scheduling is enabled | The optimization relies on the scheduler advancing while the prior output is materialized |
 | `async_chunk` is enabled | The feature targets incremental downstream Omni payloads |
 | The model stage opts in with `use_async_omni_output` | Models must declare that their output lifecycle is safe to defer |
