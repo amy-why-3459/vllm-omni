@@ -403,6 +403,17 @@ so Omni payload materialization remains synchronous.
 - [PR #4476](https://github.com/vllm-project/vllm-omni/pull/4476): Feature
   implementation, validation, and review history.
 
+## Idle generation steps
+
+Async-chunk generation stages can poll for downstream input many times between
+model forwards. After the first idle step has cleared the persistent batch,
+subsequent zero-token steps with no request or encoder-cache updates skip the
+input-preparation event and batch-state refresh. The first idle step, request
+transitions, block zeroing, encoder work, speculative decoding, and KV/EC
+transfer retain the normal path. This shortcut is restricted to DP=1 and PP=1.
+Connector receive/flush, model lifecycle hooks, and idle prefetch still execute;
+the optimization does not skip polling or change the engine's idle sleep.
+
 ## NPU generation output copies
 
 `NPUGenerationModelRunner` has a separate path for non-autoregressive outputs
