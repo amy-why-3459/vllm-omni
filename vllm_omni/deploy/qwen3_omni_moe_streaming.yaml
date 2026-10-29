@@ -1,0 +1,13 @@
+# Opt-in CUDA streaming profile for the default two-GPU placement.
+# Keep the base runner, sampling parameters and 4/25/25-frame chunk policy.
+# Fuse the residual-codebook sampler's final mask/Gumbel selection and
+# capture B2/B4 Code2Wav windows to avoid eager multi-request decoding.
+# Native top-k, sort, softmax and cumulative sums are retained. Fused
+# logarithms and batched convolutions do not promise bitwise audio parity.
+base_config: qwen3_omni_moe.yaml
+
+connectors:
+  connector_of_shared_memory:
+    extra:
+      code_predictor_fused_sampling: true
+      codec_graph_batch_sizes: [2, 4]
