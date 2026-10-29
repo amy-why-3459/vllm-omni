@@ -175,6 +175,15 @@ releasing connector state, CUDA graphs, or tensor buffers. The existing engine
 output queue bounds in-flight work; this change does not introduce a new
 admission path.
 
+Unlike the previous daemon thread, `ThreadPoolExecutor` workers are joined at
+Python interpreter exit. Embedders must call `GPUARModelRunner.shutdown()`
+while the runner and device resources are still valid; interpreter exit is not
+a substitute for draining output work. The stage engine calls shutdown from
+its `finally` block, and upstream worker shutdown delegates to the runner.
+If an output builder or device event never completes, graceful shutdown can
+still block; a supervisor must forcibly terminate an unresponsive process.
+`shutdown(wait=False)` would not remove the interpreter's join requirement.
+
 ### Safe State Snapshots
 
 The next scheduler step can mutate runner state while the background builder is
@@ -409,10 +418,12 @@ Async-chunk generation stages can poll for downstream input many times between
 model forwards. After the first idle step has cleared the persistent batch,
 subsequent zero-token steps with no request or encoder-cache updates skip the
 input-preparation event and batch-state refresh. The first idle step, request
-transitions, block zeroing, encoder work, speculative decoding, and KV/EC
+transitions, block zeroing or copying, encoder work, speculative decoding, and KV/EC
 transfer retain the normal path. This shortcut is restricted to DP=1 and PP=1.
 Connector receive/flush, model lifecycle hooks, and idle prefetch still execute;
 the optimization does not skip polling or change the engine's idle sleep.
+This input-update shortcut applies to `GPUGenerationModelRunner`; the separate
+Ascend `NPUGenerationModelRunner` retains its existing input-update path.
 
 MRv2 AR output also honors the model's `omni_pooler_payload_include_hidden`
 contract, in conjunction with the sampler's `include_hidden_states` flag.
@@ -423,7 +434,9 @@ existing hidden-state payload behavior.
 The MRv2 generation runner has its own control-only fast path. Both its
 control-only and cached-request zero-token paths deliver pending request
 prewarms after finished-request cleanup and run optional idle prefetch only on
-consecutive idle steps. Dummy/profile runs do not enqueue or execute prewarms.
+consecutive idle steps. Dummy/profile runs do not enqueue or execute prewarms,
+but a dummy run with scheduled tokens clears the idle flag so the next real
+idle step cannot prefetch while that work may still be in flight.
 Warmup uses the forward thread, stream and inference mode; failures log once
 per hook at warning level (subsequent failures at debug) and leave the inline
 reference preparation path available. Connector and auxiliary-output work

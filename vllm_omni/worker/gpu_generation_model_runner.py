@@ -227,6 +227,7 @@ class GPUGenerationModelRunner(OmniGPUModelRunner, OmniConnectorModelRunnerMixin
             and not scheduler_output.scheduled_cached_reqs.req_ids
             and not scheduler_output.finished_req_ids
             and not scheduler_output.free_encoder_mm_hashes
+            and not getattr(scheduler_output, "kv_cache_block_copies", None)
             and not scheduler_output.new_block_ids_to_zero
             and not scheduler_output.scheduled_encoder_inputs
             and not scheduler_output.scheduled_spec_decode_tokens

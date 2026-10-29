@@ -490,7 +490,15 @@ def test_prewarm_runs_after_finish_and_only_on_consecutive_idle_steps(cached):
     with pytest.raises(LookupError, match="before forward"):
         runner.execute_model(scheduler, dummy_run=True)
     assert events == []
-    assert runner._prev_step_idle
+    assert not runner._prev_step_idle
+    scheduler.total_num_scheduled_tokens = 0
+    scheduler.num_scheduled_tokens = {}
+    runner.execute_model(scheduler)
+    assert events == [("finished", set())]
+    runner.execute_model(scheduler)
+    assert events[-2:] == [("finished", set()), ("prefetch", True)]
+    scheduler.total_num_scheduled_tokens = 1
+    scheduler.num_scheduled_tokens = {"req": 1}
     with pytest.raises(LookupError, match="before forward"):
         runner.execute_model(scheduler)
     assert not runner._prev_step_idle

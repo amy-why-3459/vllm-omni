@@ -211,6 +211,7 @@ def test_unchanged_idle_poll_preserves_connector_and_prefetch_work(monkeypatch):
         "finished",
         "encoder_free",
         "zero_blocks",
+        "block_copies",
         "encoder_input",
         "spec",
         "dp",
@@ -233,6 +234,8 @@ def test_idle_input_updates_are_not_skipped_on_state_changes(monkeypatch, change
         scheduled.free_encoder_mm_hashes = ["image"]
     elif change == "zero_blocks":
         scheduled.new_block_ids_to_zero = [0]
+    elif change == "block_copies":
+        scheduled.kv_cache_block_copies = [(0, 1)]
     elif change == "encoder_input":
         scheduled.scheduled_encoder_inputs = {"req-1": [0]}
     elif change == "spec":

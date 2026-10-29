@@ -349,9 +349,11 @@ class OmniGenerationModelRunner(OmniGPUModelRunner):
         valid_dummy_state_slots: bool = False,
         randomize_inputs: bool = False,
     ) -> ModelRunnerOutput | IntermediateTensors | None:
+        prev_step_idle = self._prev_step_idle
+        # Dummy forwards also break consecutive idle polls: their device work
+        # may still be in flight when the next real idle step arrives.
+        self._prev_step_idle = scheduler_output.total_num_scheduled_tokens == 0
         if not dummy_run:
-            prev_step_idle = self._prev_step_idle
-            self._prev_step_idle = scheduler_output.total_num_scheduled_tokens == 0
             self._prepare_native_data_plane(scheduler_output)
             self.finish_requests(scheduler_output)
             self.free_states(scheduler_output)
