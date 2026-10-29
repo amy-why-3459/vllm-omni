@@ -571,40 +571,33 @@ vllm serve Qwen/Qwen2.5-Omni-7B --omni --port 8091 --deploy-config /path/to/depl
 !!! important
     We are actively iterating on the definition of deployment configurations, and we welcome feedback from users and developers.
 
-## Qwen3-Omni streaming sampler and decoder profile
+## Qwen3-Omni streaming sampler and decoder defaults
 
-`qwen3_omni_moe_streaming.yaml` is an opt-in CUDA overlay for concurrent
-speech generation. It inherits the runner and two-GPU placement from
-`qwen3_omni_moe.yaml`: Thinker on device 0, Talker and Code2Wav on device 1.
+The default `qwen3_omni_moe.yaml` enables two CUDA streaming optimizations
+for concurrent speech generation:
 
-```bash
-vllm serve Qwen/Qwen3-Omni-30B-A3B-Instruct --omni \
-  --deploy-config vllm_omni/deploy/qwen3_omni_moe_streaming.yaml
-```
+| Connector option | Default | Purpose |
+| --- | --- | --- |
+| `code_predictor_fused_sampling` | `true` | Fuse the residual-codebook sampler's final nucleus mask and Gumbel selection. Native top-k, sorting, softmax and cumulative sums remain. |
+| `codec_graph_batch_sizes` | `[2, 4]` | Capture multi-row Code2Wav graphs for streaming windows, avoiding eager decoding for compatible batches. Larger batches are split into supported groups. |
 
-The overlay changes two connector options:
-
-| Option | Base | Streaming overlay | Purpose |
-| --- | --- | --- | --- |
-| `code_predictor_fused_sampling` | Disabled | `true` | Fuse the residual-codebook sampler's final nucleus mask and Gumbel selection. Native top-k, sorting, softmax and cumulative sums remain. |
-| `codec_graph_batch_sizes` | Single-row graphs | `[2, 4]` | Capture multi-row Code2Wav graphs for streaming windows, avoiding eager decoding for compatible batches. Larger batches are split into supported groups. |
-
-Chunk timing remains four frames initially, then 25 new frames with up to
-25 frames of left context. Sampling parameters, prefix caching, GPU memory
-fractions and the model runner are inherited unchanged. This profile does
-not enable predictor KV caching, first-frame delivery in the Talker, a chunk
-ramp, or cuDNN autotuning. Those options belong to the separate MRv2 profiles.
+The implementation gates these paths on CUDA support. The two-GPU placement,
+sampling parameters and chunk policy remain unchanged: four frames initially,
+then 25 new frames with up to 25 frames of left context. Existing deploy
+profiles inherit these options unless they override them.
 
 Additional decoder graphs increase startup work and can increase memory use.
 Fused logarithms and batched convolution shapes can change floating-point
 rounding; do not assume bitwise-identical codec tokens or audio. Validate
 speech quality as well as first audio packet latency and throughput on the
-intended hardware and concurrency. A first packet metric does not measure
+intended hardware and concurrency. First packet latency does not measure
 leading silence or time to first audible speech.
 
-For an A/B comparison, serve the base and overlay in separate runs on the
-same devices. Warm each configuration with representative batch and chunk
-shapes before recording repeated measurements with the profiler disabled:
+For rollback or an A/B baseline, set `code_predictor_fused_sampling: false`
+and `codec_graph_batch_sizes: []` in the connector's `extra` section of your
+deploy config. Change one option at a time to isolate its effect. Warm each
+configuration with representative batch and chunk shapes, then record repeated
+measurements with the profiler disabled:
 
 ```bash
 # Requires a local Seed-TTS evaluation dataset. Repeat at concurrency 1 and 4.
@@ -616,9 +609,6 @@ vllm-omni bench serve --omni --model Qwen/Qwen3-Omni-30B-A3B-Instruct \
   --percentile-metrics ttft,e2el,audio_ttfp,audio_rtf \
   --save-result --save-detailed --result-dir ./streaming-results
 ```
-
-To isolate either option, copy the overlay and remove that option; to roll
-back both, select `qwen3_omni_moe.yaml`. The default deployment is unchanged.
 
 ## Qwen3-TTS with Model Runner V2
 
