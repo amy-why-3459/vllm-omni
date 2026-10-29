@@ -414,6 +414,21 @@ transfer retain the normal path. This shortcut is restricted to DP=1 and PP=1.
 Connector receive/flush, model lifecycle hooks, and idle prefetch still execute;
 the optimization does not skip polling or change the engine's idle sleep.
 
+MRv2 AR output also honors the model's `omni_pooler_payload_include_hidden`
+contract, in conjunction with the sampler's `include_hidden_states` flag.
+Opting out omits hidden-state output copies, while logits and sampling continue
+to receive the original hidden states. Models without the flag retain the
+existing hidden-state payload behavior.
+
+The MRv2 generation runner has its own control-only fast path. Both its
+control-only and cached-request zero-token paths deliver pending request
+prewarms after finished-request cleanup and run optional idle prefetch only on
+consecutive idle steps. Dummy/profile runs do not enqueue or execute prewarms.
+Warmup uses the forward thread, stream and inference mode; failures log once
+per hook at warning level (subsequent failures at debug) and leave the inline
+reference preparation path available. Connector and auxiliary-output work
+still runs on every idle step.
+
 ## NPU generation output copies
 
 `NPUGenerationModelRunner` has a separate path for non-autoregressive outputs
