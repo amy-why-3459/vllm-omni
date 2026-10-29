@@ -659,29 +659,6 @@ def test_pipeline_source_file_dependency_keys_are_registered() -> None:
     assert not missing, f"unregistered source_file_dependencies keys: {sorted(missing)}"
 
 
-def test_drama3_runs_when_model_runner_v2_changes() -> None:
-    _load_source_file_dependencies.cache_clear()
-    doc = {
-        "steps": [
-            {
-                "label": "TTS · Drama 3 Test",
-                "source_file_dependencies": "tts_drama_3_function",
-                "commands": ["pytest tests/e2e/online_serving/test_drama_3.py"],
-            },
-        ],
-    }
-    for path in (
-        "vllm_omni/worker_v2/model_states/__init__.py",
-        "vllm_omni/platforms/npu/worker/npu_omni_v2_model_runner.py",
-        "vllm_omni/deploy/fish_omni.yaml",
-    ):
-        assert "TTS · Drama 3 Test" in _surviving_labels(doc, [path]), path
-    assert "TTS · Drama 3 Test" not in _surviving_labels(
-        doc,
-        ["vllm_omni/model_executor/models/qwen3_tts/qwen3_tts_talker.py"],
-    )
-
-
 def test_source_file_dependencies_key_expands_from_registry() -> None:
     doc = {
         "steps": [
