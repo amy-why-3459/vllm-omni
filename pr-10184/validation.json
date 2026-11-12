@@ -1,0 +1,12 @@
+{
+  "pr_head": "e4773063f1c16fdbd5897b772be12262fe5035d5",
+  "latency_rows": 69,
+  "raw_timing_samples": 207,
+  "source_hashes_verified_against_pr_manifest": 20,
+  "median_recalculation": "all match",
+  "sample_count": "3 per point",
+  "targets": "all match frozen workload",
+  "all_targets_unmet": true,
+  "error_bars": "observed min/max, not confidence intervals",
+  "campaign_verdict": "INCONCLUSIVE"
+}
