@@ -1,0 +1,927 @@
+{
+  "engine_revision": "31364f79890ea559b4580ef4bc46eeabacf7af53",
+  "configurations": {
+    "defaults": {
+      "additional_config": null,
+      "cache_config": null
+    },
+    "explicit": {
+      "additional_config": {
+        "text_encoder_cudnn_sdp": false,
+        "npu_deterministic": true,
+        "npu_disable_internal_format": true,
+        "npu_disable_jit_compile": true,
+        "npu_vae_tile_graph": true,
+        "npu_vae_tile_batch": 32,
+        "npu_vae_encoder_precision": "fp16",
+        "npu_vae_encoder_batch": 8
+      },
+      "cache_config": {
+        "minimax_h3_adaln_offload": true
+      }
+    }
+  },
+  "environment": {
+    "OMP_NUM_THREADS": "4",
+    "MKL_NUM_THREADS": "4",
+    "HCCL_DETERMINISTIC": "true",
+    "TASK_QUEUE_ENABLE": "1"
+  },
+  "source_hashes": {
+    "vllm_omni/platforms/npu/models/minimax_h3_image.py": "bef5505cd4980729c514ac36a68f20b8325578c05007d721496b7ee0cb4449e9",
+    "vllm_omni/diffusion/models/minimax_h3/minimax_h3_transformer.py": "dffd0ce4b2d3cab88982ce9e525a9aba080bc5032f249dcbbd96aa8728ab896b"
+  },
+  "server_exit_codes": {
+    "defaults": 0,
+    "explicit": 0
+  },
+  "scope": "Default-resolution and full-model output equivalence; not a new optimization speedup or final ABBA claim",
+  "hardware": {
+    "type": "Ascend 910B1",
+    "devices": 4,
+    "memory_gib_per_device": 64
+  },
+  "protocol": {
+    "workloads": [
+      "W1",
+      "W2",
+      "W3"
+    ],
+    "steps": 6,
+    "concurrency": 1,
+    "timed_seed": 42,
+    "warmups_per_workload": 1,
+    "measured_repeats": 3,
+    "extra_seeds": [
+      43,
+      44
+    ]
+  },
+  "software": {
+    "python": "3.12.16",
+    "torch": "2.10.0+cpu",
+    "torch_npu": "2.10.0.post7",
+    "vllm": "0.33.0",
+    "transformers": "5.19.0",
+    "diffusers": "0.40.0"
+  },
+  "cpu_validation": {
+    "passed": 119,
+    "post_fixture_cleanup_rerun_passed": 2,
+    "selected_mypy": "PASS; model port excluded by repository wrapper",
+    "format_and_repository_hooks": "PASS"
+  },
+  "records": {
+    "defaults": [
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 0,
+        "warmup": true,
+        "complete": true,
+        "latency_s": 26.79596367495833,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 1,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.095973093993962,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 2,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.082912102981936,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 3,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.018551846034825,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 0,
+        "warmup": true,
+        "complete": true,
+        "latency_s": 2.6656004870310426,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 1,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.78975067200372,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 2,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.751685069000814,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 3,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.6458143109921366,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 0,
+        "warmup": true,
+        "complete": true,
+        "latency_s": 14.736731484998018,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 1,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.666254949988797,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 2,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.891855237015989,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 3,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.608185576973483,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      }
+    ],
+    "defaults-quality": [
+      {
+        "workload": "W1",
+        "seed": 43,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.268007684033364,
+        "http_status": 200,
+        "rgb_sha256": "c8a91980f7f2747d3131f72c90c1905a2e604ae897955e1b0a60d6d0b0b4d230",
+        "png_sha256": "27ade1a3cca3eeb9eddb39ff47f910826f9d3293ca1a48558601412367cc2d0a",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 44,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.174278111953754,
+        "http_status": 200,
+        "rgb_sha256": "253678899079cee65679f6f3d2c493f7d81e5293adb3158f0ac6d76eb98ae0f8",
+        "png_sha256": "671a5348ec868e1e7ecb1c8c709ed1ef8db49326a37aaa1017b1a246f0d52ea1",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 43,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.7212834369856864,
+        "http_status": 200,
+        "rgb_sha256": "04164f7c57dbbedbd6c3d376373ac3e2ed2e78f9e2f7fb95f880cb226f320b8b",
+        "png_sha256": "59235f9fe9f2550a32b6aefda8cbf7076134751023f461675034635416ba3135",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 44,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.831534219032619,
+        "http_status": 200,
+        "rgb_sha256": "4ccefd88347cef9c673290928cbd2ad8400d51efa3e6303490a91b01d0bd44c5",
+        "png_sha256": "958262c0bc9ac8ea3835670b7b57ee8bcd22f6ae0ea5bab9d0900b2724d6ac5e",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 43,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.7606776090105996,
+        "http_status": 200,
+        "rgb_sha256": "51005ad95d35f1e47e95779362910425b9b8c4580f4d5d04302f4692b881268a",
+        "png_sha256": "8a7ca5d996d9b130f31be16838be3f942eb2edfec023daa8d9010205754c57ea",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 44,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.360368550987914,
+        "http_status": 200,
+        "rgb_sha256": "d3bcb764e78a322c6afd6812c69d11a75e29846b6cdad9a65a1f300e6841b168",
+        "png_sha256": "9112126ab4a59bdbf4278070dab084f326c7d8ed48caa0528e99ee70c89e455e",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      }
+    ],
+    "explicit": [
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 0,
+        "warmup": true,
+        "complete": true,
+        "latency_s": 28.667594547965564,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 1,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 10.99081002996536,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 2,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.104199764027726,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 42,
+        "index": 3,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.19169193302514,
+        "http_status": 200,
+        "rgb_sha256": "7b22c75b04d0f69b56ce9dd67de14acaad0531959245c9c7304757dfa8105cc4",
+        "png_sha256": "4b22824c0c185d229d04124bacc022919b73d712e93ce1c30fe7d7cfdf19aecc",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 0,
+        "warmup": true,
+        "complete": true,
+        "latency_s": 2.9064442509552464,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 1,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.7648774429690093,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 2,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.64215318497736,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 42,
+        "index": 3,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.8997212650137953,
+        "http_status": 200,
+        "rgb_sha256": "a5eed4f1dc64f8e450ea8d4d8d1d21eaf586e1eb48c17b539605e8ab61d0ea15",
+        "png_sha256": "f6bf433d7755a9a3c9aa95e6e8e71c528744be93811280f46d87521ebef522da",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 0,
+        "warmup": true,
+        "complete": true,
+        "latency_s": 15.136087524995673,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 1,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.804506240005139,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 2,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.789045277051628,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 42,
+        "index": 3,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.583695257024374,
+        "http_status": 200,
+        "rgb_sha256": "e2ac34b7c8b8afad6c40671a18bb7448cbe07781e566fe1668aabf365e17dea7",
+        "png_sha256": "b11ad3b95c269d1cea547f6b3e7d3b97fae2d9b4ac0df016697658332d70a6bf",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      }
+    ],
+    "explicit-quality": [
+      {
+        "workload": "W1",
+        "seed": 43,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.352888472029008,
+        "http_status": 200,
+        "rgb_sha256": "c8a91980f7f2747d3131f72c90c1905a2e604ae897955e1b0a60d6d0b0b4d230",
+        "png_sha256": "27ade1a3cca3eeb9eddb39ff47f910826f9d3293ca1a48558601412367cc2d0a",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W1",
+        "seed": 44,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 11.24542313296115,
+        "http_status": 200,
+        "rgb_sha256": "253678899079cee65679f6f3d2c493f7d81e5293adb3158f0ac6d76eb98ae0f8",
+        "png_sha256": "671a5348ec868e1e7ecb1c8c709ed1ef8db49326a37aaa1017b1a246f0d52ea1",
+        "image_shape": [
+          3552,
+          4736,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 43,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 3.168952209991403,
+        "http_status": 200,
+        "rgb_sha256": "04164f7c57dbbedbd6c3d376373ac3e2ed2e78f9e2f7fb95f880cb226f320b8b",
+        "png_sha256": "59235f9fe9f2550a32b6aefda8cbf7076134751023f461675034635416ba3135",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W2",
+        "seed": 44,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 2.821702382003423,
+        "http_status": 200,
+        "rgb_sha256": "4ccefd88347cef9c673290928cbd2ad8400d51efa3e6303490a91b01d0bd44c5",
+        "png_sha256": "958262c0bc9ac8ea3835670b7b57ee8bcd22f6ae0ea5bab9d0900b2724d6ac5e",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 43,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.863478915998712,
+        "http_status": 200,
+        "rgb_sha256": "51005ad95d35f1e47e95779362910425b9b8c4580f4d5d04302f4692b881268a",
+        "png_sha256": "8a7ca5d996d9b130f31be16838be3f942eb2edfec023daa8d9010205754c57ea",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      },
+      {
+        "workload": "W3",
+        "seed": 44,
+        "index": 0,
+        "warmup": false,
+        "complete": true,
+        "latency_s": 4.443608328001574,
+        "http_status": 200,
+        "rgb_sha256": "d3bcb764e78a322c6afd6812c69d11a75e29846b6cdad9a65a1f300e6841b168",
+        "png_sha256": "9112126ab4a59bdbf4278070dab084f326c7d8ed48caa0528e99ee70c89e455e",
+        "image_shape": [
+          1024,
+          1024,
+          3
+        ]
+      }
+    ]
+  },
+  "medians_s": {
+    "defaults": {
+      "W1": 11.082912102981936,
+      "W2": 2.751685069000814,
+      "W3": 4.666254949988797
+    },
+    "explicit": {
+      "W1": 11.104199764027726,
+      "W2": 2.7648774429690093,
+      "W3": 4.789045277051628
+    }
+  },
+  "worker_exit_codes": {
+    "defaults": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "explicit": [
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  "adaln_host_staging_worker_logs": {
+    "defaults": 4,
+    "explicit": 4
+  },
+  "default_vs_explicit": [
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 1,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 2,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 3,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 1,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 2,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 3,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 1,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 2,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 3,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 43,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 44,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 43,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 44,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 43,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 44,
+      "index": 0,
+      "exact_rgb": true
+    }
+  ],
+  "default_vs_previous_explicit": [
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 1,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 2,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 42,
+      "index": 3,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 1,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 2,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 42,
+      "index": 3,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 1,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 2,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 42,
+      "index": 3,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 43,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W1",
+      "seed": 44,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 43,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W2",
+      "seed": 44,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 43,
+      "index": 0,
+      "exact_rgb": true
+    },
+    {
+      "workload": "W3",
+      "seed": 44,
+      "index": 0,
+      "exact_rgb": true
+    }
+  ],
+  "previous_revision": "5e579b70dec7c65f3a8560a539f48a75445e83b7",
+  "limitations": [
+    "FP16 encoder and batching remain approximate relative to the native FP32/single-tile control.",
+    "No final ABBA, supplemental prompt suite or full visual acceptance.",
+    "This validates the tested four-device layout; it does not establish every NPU/runtime/memory combination.",
+    "Other host users may run CPU tasks; timings are descriptive only.",
+    "Raw images and host logs remain local."
+  ],
+  "exact_matches": {
+    "default_vs_explicit": 18,
+    "default_vs_previous_explicit": 18
+  },
+  "harness_sha256": {
+    "benchmark.py": "c889b1a3749f9fac69f557f398a870fd8091dee3f86eb36bba55dddf90e738aa",
+    "plan/workload.json": "b3311996b012195f574d4c3a143c4ee26029d55d54bb84c0c6b243fbd07dce85",
+    "plan/quality-exploration.json": "332c095aa72606623be2a853bc4801f14703d4738ef1d9108a46649b587646e5"
+  }
+}
