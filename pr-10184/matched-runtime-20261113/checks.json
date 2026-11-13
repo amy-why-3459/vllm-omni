@@ -1,0 +1,49 @@
+{
+  "engine_revision": "5e579b70dec7c65f3a8560a539f48a75445e83b7",
+  "baseline_revision": "7f8395fede3cb79991a256d1752c887b40faca30",
+  "cpu_regressions": {
+    "passed": 63,
+    "command": "python -m pytest tests/diffusion/test_stage_diffusion_client.py tests/diffusion/test_stage_diffusion_proc.py tests/diffusion/test_npu_shutdown_grace.py tests/platforms/npu/test_minimax_h3_image_graphs.py tests/platforms/npu/test_minimax_h3_encoder_batch.py -q"
+  },
+  "targeted_baseline_regressions": {
+    "failed": 6,
+    "passed": 6,
+    "note": "Four default/explicit uni shutdown cases and two JIT control cases fail before the fix."
+  },
+  "passed_hooks": [
+    "debug-statements",
+    "end-of-file-fixer",
+    "mixed-line-ending",
+    "trailing-whitespace",
+    "ruff-check",
+    "ruff-format",
+    "typos",
+    "markdownlint-cli2",
+    "check-mark",
+    "check-spdx-header",
+    "check-forbidden-imports",
+    "check-torch-cuda-call"
+  ],
+  "mypy": {
+    "passed": false,
+    "introduced_errors": 0,
+    "baseline_reproduced_errors": [
+      "vllm_omni/diffusion/stage_diffusion_proc.py:200: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"step_streaming\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_proc.py:235: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"step_streaming\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_proc.py:295: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"collective_rpc\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_proc.py:306: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"collective_rpc\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_proc.py:317: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"collective_rpc\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_proc.py:334: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"collective_rpc\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_proc.py:346: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"collective_rpc\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_proc.py:604: error: Item \"None\" of \"DiffusionEngine | None\" has no attribute \"abort\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_client.py:193: error: Item \"None\" of \"StageDiffusionProcManager | None\" has no attribute \"proc\"  [union-attr]",
+      "vllm_omni/diffusion/stage_diffusion_client.py:488: error: Item \"None\" of \"StageDiffusionProcManager | None\" has no attribute \"proc\"  [union-attr]"
+    ],
+    "note": "Identical ten errors on the original and fixed heads for this same five-file selection; tests group passed."
+  },
+  "tooling_limitations": [
+    "Monolithic pre-commit environment setup was blocked by check-jsonschema requiring Python >=3.10 while the host runner used Python 3.9. Applicable hooks were run individually and passed.",
+    "No workflow, Buildkite or shell file changed; their hooks were not applicable."
+  ],
+  "ai_assistance": "Codex: implementation, validation orchestration and evidence preparation"
+}
